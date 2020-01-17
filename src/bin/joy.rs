@@ -141,12 +141,7 @@ fn main() -> Result<(), String> {
             // graphics
             {
                 texture.with_lock(None, |buffer: &mut [u8], _: usize| {
-                    cpu.get_frame_buffer()
-                        .iter()
-                        .zip(buffer.chunks_exact_mut(3))
-                        .for_each(|(color, buffer)| {
-                            buffer.copy_from_slice(&color.to_be_bytes()[1..]);
-                        });
+                    buffer.copy_from_slice(cpu.get_frame_buffer());
                 })?;
                 canvas.copy(&texture, None, None)?;
                 canvas.present();

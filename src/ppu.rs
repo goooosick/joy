@@ -10,6 +10,8 @@ const OAM_SIZE: usize = 0xa0;
 const SPRITE_COUNT: usize = 40;
 const MAX_SPRITE_PER_LINE: usize = 10;
 
+const FRAME_BUFFER_SIZE: usize = GB_LCD_WIDTH * GB_LCD_HEIGHT * 3;
+
 // black-white
 // const COLOR_PALETTE: [u32; 4] = [0x00ff_ffff, 0x00c0_c0c0, 0x0060_6060, 0x0000_0000];
 // classic
@@ -19,10 +21,16 @@ const MAX_SPRITE_PER_LINE: usize = 10;
 // kirokaze gameboy
 // const COLOR_PALETTE: [u32; 4] = [0x00e2_f3e4, 0x0094e_344, 0x0046_878f, 0x0033_2c50];
 // mist gb
-const COLOR_PALETTE: [u32; 4] = [0x00c4_f0c2, 0x005a_b9a8, 0x001e_606e, 0x002d_1b00];
+const COLOR_PALETTE: [[u8; 3]; 4] = [
+    [0xc4, 0xf0, 0xc2],
+    [0x5a, 0xb9, 0xa8],
+    [0x1e, 0x60, 0x6e],
+    [0x2d, 0x1b, 0x00],
+];
 
 pub struct Ppu {
-    frame_buffer: Box<[u32; GB_LCD_WIDTH * GB_LCD_HEIGHT]>,
+    frame_buffer: Box<[u8; FRAME_BUFFER_SIZE]>,
+    back_buffer: Box<[u8; FRAME_BUFFER_SIZE]>,
 
     tile_sets: Box<[u8; TILESET_SIZE]>,
     tiles: Box<[Tile; TILES_COUNT]>,
@@ -53,7 +61,8 @@ impl Ppu {
     pub fn new() -> Ppu {
         let empty_tile = [[TileValue::B00; 8]; 8];
         Ppu {
-            frame_buffer: Box::new([0x00ff_ffff; GB_LCD_WIDTH * GB_LCD_HEIGHT]),
+            frame_buffer: Box::new([0u8; FRAME_BUFFER_SIZE]),
+            back_buffer: Box::new([0u8; FRAME_BUFFER_SIZE]),
 
             tile_sets: Box::new([0u8; TILESET_SIZE]),
             tiles: Box::new([empty_tile; TILES_COUNT]),
@@ -81,13 +90,9 @@ impl Ppu {
         }
     }
 
-    pub fn get_frame_buffer(&self) -> &[u32] {
-        self.frame_buffer.as_ref()
-    }
-
     fn render_line(&mut self) {
         let pattern_offset = (!self.lcdc.contains(LCDC::TILE_PATTERN_TABLE)) as usize;
-        let fb_offset = self.ly as usize * GB_LCD_WIDTH;
+        let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
         let mut bg_row = [TileValue::B00; GB_LCD_WIDTH];
 
         if self.lcdc.contains(LCDC::BG_DISPLAY_ON) {
@@ -125,7 +130,8 @@ impl Ppu {
                 let palette_index = self.tiles[tile_index][tile_y][tile_x];
                 let color_index = self.bg_palette.pal[palette_index as usize];
 
-                self.frame_buffer[fb_offset + x] = COLOR_PALETTE[color_index];
+                self.frame_buffer[(fb_offset + x * 3)..][0..3]
+                    .copy_from_slice(&COLOR_PALETTE[color_index]);
                 bg_row[x] = palette_index;
             }
         }
@@ -156,7 +162,8 @@ impl Ppu {
                 let palette_index = self.tiles[tile_index][tile_y][tile_x];
                 let color_index = self.bg_palette.pal[palette_index as usize];
 
-                self.frame_buffer[fb_offset + x] = COLOR_PALETTE[color_index];
+                self.frame_buffer[(fb_offset + x * 3)..][0..3]
+                    .copy_from_slice(&COLOR_PALETTE[color_index]);
                 bg_row[x] = palette_index;
             }
         }
@@ -218,8 +225,8 @@ impl Ppu {
                     if on_screen && color != TileValue::B00 {
                         if sprite.above_bg || bg_row[screen_x as usize] == TileValue::B00 {
                             let color_index = self.obj_palettes[sprite.palette as usize][color];
-                            self.frame_buffer[fb_offset + screen_x as usize] =
-                                COLOR_PALETTE[color_index];
+                            self.frame_buffer[(fb_offset + screen_x as usize * 3)..][0..3]
+                                .copy_from_slice(&COLOR_PALETTE[color_index]);
                         }
                     }
                 }
@@ -281,6 +288,8 @@ impl Ppu {
                     self.ly += 1;
 
                     if self.ly >= 153 {
+                        std::mem::swap(&mut self.frame_buffer, &mut self.back_buffer);
+
                         self.ly = 0;
                         self.mode = Mode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
@@ -387,6 +396,10 @@ impl Ppu {
 
             _ => unreachable!(),
         }
+    }
+
+    pub fn get_frame_buffer(&self) -> &[u8] {
+        self.back_buffer.as_ref()
     }
 
     fn update_tiles(&mut self, addr: usize, data: u8) {
