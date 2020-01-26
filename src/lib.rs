@@ -34,4 +34,4 @@ pub const GB_CLOCK_SPEED: u32 = 4_194_304;
 pub const GB_DEVICE_FPS: u32 = 60;
 
 /// Audio frequency divider (1, 2, 4), using bigger value to reduce apu update rate.
-pub const AUDIO_FREQ_DIVIDER: u32 = 4;
+pub const AUDIO_FREQ_DIVIDER: u32 = 2;

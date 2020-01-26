@@ -64,7 +64,7 @@ impl Sweep {
         self.shadow_freq = freq;
         self.reset_counter();
 
-        if self.period > 0 && self.shift > 0 {
+        if self.shift > 0 {
             let new = self.calc_freq();
             if new > 2047 {
                 return false;

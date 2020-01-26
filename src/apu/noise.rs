@@ -53,6 +53,7 @@ impl Noise {
         self.dac = if (data & 0b1111_1000) != 0 {
             DacMode::On
         } else {
+            self.mode = ChannelMode::Off;
             DacMode::Off
         };
     }

@@ -1,48 +1,25 @@
 use crate::interrupt::{Interrupt, InterruptHandler};
 use crate::{GB_LCD_HEIGHT, GB_LCD_WIDTH};
 use bitflags::bitflags;
-use std::ops::Index;
 
-const TILESET_SIZE: usize = 0x1800;
-const TILEMAP_SIZE: usize = 0x800;
-const TILES_COUNT: usize = 0x180;
-const OAM_SIZE: usize = 0xa0;
-const SPRITE_COUNT: usize = 40;
+use palette::*;
+use vram::*;
+
+mod palette;
+mod vram;
+
 const MAX_SPRITE_PER_LINE: usize = 10;
-
 const FRAME_BUFFER_SIZE: usize = GB_LCD_WIDTH * GB_LCD_HEIGHT * 3;
-
-// black-white
-// const COLOR_PALETTE: [u32; 4] = [0x00ff_ffff, 0x00c0_c0c0, 0x0060_6060, 0x0000_0000];
-// classic
-// const COLOR_PALETTE: [u32; 4] = [0x00ef_ffde, 0x00ad_d794, 0x0052_9273, 0x0018_3442];
-// bgb
-// const COLOR_PALETTE: [u32; 4] = [0x00e0_f8d0, 0x0088_c070, 0x0034_6856, 0x0008_1820];
-// kirokaze gameboy
-// const COLOR_PALETTE: [u32; 4] = [0x00e2_f3e4, 0x0094e_344, 0x0046_878f, 0x0033_2c50];
-// mist gb
-const COLOR_PALETTE: [[u8; 3]; 4] = [
-    [0xc4, 0xf0, 0xc2],
-    [0x5a, 0xb9, 0xa8],
-    [0x1e, 0x60, 0x6e],
-    [0x2d, 0x1b, 0x00],
-];
 
 pub struct Ppu {
     frame_buffer: Box<[u8; FRAME_BUFFER_SIZE]>,
     back_buffer: Box<[u8; FRAME_BUFFER_SIZE]>,
 
-    tile_sets: Box<[u8; TILESET_SIZE]>,
-    tiles: Box<[Tile; TILES_COUNT]>,
-
-    tile_maps: Box<[u8; TILEMAP_SIZE]>,
-
-    sprite_table: Box<[u8; OAM_SIZE]>,
-    sprites: Box<[Sprite; SPRITE_COUNT]>,
+    vram: VideoRam,
 
     lcdc: LCDC,
     stat: STAT,
-    mode: Mode,
+    mode: LcdMode,
 
     scy: u8,
     scx: u8,
@@ -52,29 +29,23 @@ pub struct Ppu {
     winx: u8,
 
     bg_palette: Palette,
-    obj_palettes: [Palette; 2],
+    obj_palette: Palette,
+    cgb: bool,
 
     clocks: u32,
 }
 
 impl Ppu {
-    pub fn new() -> Ppu {
-        let empty_tile = [[TileValue::B00; 8]; 8];
+    pub fn new(cgb: bool) -> Ppu {
         Ppu {
             frame_buffer: Box::new([0u8; FRAME_BUFFER_SIZE]),
             back_buffer: Box::new([0u8; FRAME_BUFFER_SIZE]),
 
-            tile_sets: Box::new([0u8; TILESET_SIZE]),
-            tiles: Box::new([empty_tile; TILES_COUNT]),
-
-            tile_maps: Box::new([0u8; TILEMAP_SIZE]),
-
-            sprite_table: Box::new([0u8; OAM_SIZE]),
-            sprites: Box::new([Sprite::default(); SPRITE_COUNT]),
+            vram: VideoRam::new(),
 
             lcdc: Default::default(),
             stat: Default::default(),
-            mode: Mode::Transfer,
+            mode: LcdMode::Transfer,
 
             scy: 0,
             scx: 0,
@@ -83,14 +54,149 @@ impl Ppu {
             winy: 0,
             winx: 0,
 
-            bg_palette: Default::default(),
-            obj_palettes: [Default::default(); 2],
+            bg_palette: Palette::build(cgb),
+            obj_palette: Palette::build(cgb),
+            cgb,
 
             clocks: 0,
         }
     }
 
+    fn render_line_cgb(&mut self) {
+        let pattern_offset = (!self.lcdc.contains(LCDC::TILE_PATTERN_TABLE)) as usize;
+        let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
+        let mut bg_above = [false; GB_LCD_WIDTH];
+        let mut bg_b00 = [false; GB_LCD_WIDTH];
+
+        // background
+        {
+            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::BG_TILE_TABLE) as usize);
+
+            let tilemap_y = self.ly.wrapping_add(self.scy) as usize;
+            let tilemap_offset = tilemap_offset + (tilemap_y / 8) * 32;
+            let tile_y = tilemap_y & 0x07;
+
+            for x in 0..GB_LCD_WIDTH {
+                let tilemap_x = (x as u8).wrapping_add(self.scx) as usize;
+                let tilemap_index = tilemap_offset + tilemap_x / 8;
+                let attr = self.vram.attrmap(tilemap_index);
+
+                let tile_index = {
+                    let index = self.vram.tilemap(tilemap_index);
+                    index + (pattern_offset * (index < 0x80) as usize) * 0x100
+                };
+
+                let mut tile_x = tilemap_x & 0x07;
+                if attr.flip_x {
+                    tile_x = 7 - tile_x;
+                }
+                let tile_y = if attr.flip_y { 7 - tile_y } else { tile_y };
+
+                let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
+                let color = self.bg_palette.color(attr.bg_pal_index, color_index);
+
+                self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
+                bg_above[x] = attr.above_all;
+                bg_b00[x] = color_index == TileValue::B00;
+            }
+        }
+
+        // window
+        if self.lcdc.contains(LCDC::WINDOW_DISPLAY_ON) && self.ly >= self.winy {
+            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::WINDOW_TILE_TABLE) as usize);
+
+            let tilemap_y = (self.ly - self.winy) as usize;
+            let tilemap_offset = tilemap_offset + (tilemap_y / 8) * 32;
+            let tile_y = tilemap_y & 0x07;
+
+            let win_x = self.winx.saturating_sub(7) as usize;
+            let winx_offset = (7 - (self.winx as isize)).max(0) as usize;
+
+            for (tilemap_x, x) in (win_x..GB_LCD_WIDTH).enumerate() {
+                let tilemap_x = tilemap_x + winx_offset;
+                let tilemap_index = tilemap_offset + tilemap_x / 8;
+                let attr = self.vram.attrmap(tilemap_index);
+
+                let tile_index = {
+                    let index = self.vram.tilemap(tilemap_index);
+                    index + (pattern_offset * (index < 0x80) as usize) * 0x100
+                };
+
+                let tile_x = tilemap_x & 0x07;
+                let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
+                let color = self.bg_palette.color(attr.bg_pal_index, color_index);
+
+                self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
+                bg_above[x] = attr.above_all;
+                bg_b00[x] = color_index == TileValue::B00;
+            }
+        }
+
+        let sprite_above = !self.lcdc.contains(LCDC::BG_DISPLAY_ON);
+        if self.lcdc.contains(LCDC::OBJECT_DISPLAY_ON) {
+            let sprite_size = 8 * (1 + self.lcdc.contains(LCDC::OBJECT_SIZE) as i16);
+            let ly = self.ly as i16;
+
+            let sprites = self
+                .vram
+                .sprites()
+                .iter()
+                .filter(|sp| {
+                    sp.y <= ly
+                        && (sp.y + sprite_size) > ly
+                        && (sp.x + 8 >= 0)
+                        && sp.x < GB_LCD_WIDTH as i16
+                })
+                .take(MAX_SPRITE_PER_LINE)
+                .collect::<Vec<_>>();
+
+            for sprite in sprites.iter().rev() {
+                let sprite_y = (ly - sprite.y) as usize;
+
+                let mut tile_y = sprite_y & 0x07;
+                if sprite.flip_y {
+                    tile_y = 7 - tile_y;
+                }
+
+                let tile_index = if sprite_size == 16 {
+                    if sprite.flip_y ^ (sprite_y < 8) {
+                        sprite.tile_index & 0xfe
+                    } else {
+                        sprite.tile_index | 0x01
+                    }
+                } else {
+                    sprite.tile_index
+                };
+                let tile = self.vram.tile(sprite.vram_bank_cgb, tile_index as usize);
+
+                for x in 0..8 {
+                    let screen_x = sprite.x + x;
+
+                    let tile_x = if sprite.flip_x { 7 - x } else { x };
+                    let color_index = tile[tile_y as usize][tile_x as usize];
+
+                    let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
+                    if on_screen && color_index != TileValue::B00 {
+                        if sprite_above
+                            || (!bg_above[screen_x as usize]
+                                && (sprite.above_bg || bg_b00[screen_x as usize]))
+                        {
+                            let color = self.obj_palette.color(sprite.palette_cgb, color_index);
+                            self.frame_buffer[(fb_offset + screen_x as usize * 3)..][0..3]
+                                .copy_from_slice(color);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     fn render_line(&mut self) {
+        if self.cgb {
+            self.render_line_cgb();
+            return;
+        }
+
         let pattern_offset = (!self.lcdc.contains(LCDC::TILE_PATTERN_TABLE)) as usize;
         let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
         let mut bg_row = [TileValue::B00; GB_LCD_WIDTH];
@@ -120,19 +226,18 @@ impl Ppu {
 
                 let tilemap_index = tilemap_offset + tilemap_x / 8;
                 let tile_index = {
-                    let index = self.tile_maps[tilemap_index] as usize;
+                    let index = self.vram.tilemap(tilemap_index);
                     // when using pattern 0, the index is signed
                     // but -128 ~ -0 is the same in bits as 128 ~ 255
                     // so only the 0 ~ 127 part (< 0x80) need offset
                     index + (pattern_offset * (index < 0x80) as usize) * 0x100
                 };
 
-                let palette_index = self.tiles[tile_index][tile_y][tile_x];
-                let color_index = self.bg_palette.pal[palette_index as usize];
+                let color_index = self.vram.tile(0, tile_index)[tile_y][tile_x];
+                let color = self.bg_palette.color(0, color_index);
 
-                self.frame_buffer[(fb_offset + x * 3)..][0..3]
-                    .copy_from_slice(&COLOR_PALETTE[color_index]);
-                bg_row[x] = palette_index;
+                self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
+                bg_row[x] = color_index;
             }
         }
 
@@ -154,17 +259,16 @@ impl Ppu {
 
                 let tilemap_index = tilemap_offset + tilemap_x / 8;
                 let tile_index = {
-                    let index = self.tile_maps[tilemap_index] as usize;
+                    let index = self.vram.tilemap(tilemap_index);
                     index + (pattern_offset * (index < 0x80) as usize) * 0x100
                 };
 
                 let tile_x = tilemap_x & 0x07;
-                let palette_index = self.tiles[tile_index][tile_y][tile_x];
-                let color_index = self.bg_palette.pal[palette_index as usize];
+                let color_index = self.vram.tile(0, tile_index)[tile_y][tile_x];
+                let color = self.bg_palette.color(0, color_index);
 
-                self.frame_buffer[(fb_offset + x * 3)..][0..3]
-                    .copy_from_slice(&COLOR_PALETTE[color_index]);
-                bg_row[x] = palette_index;
+                self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
+                bg_row[x] = color_index;
             }
         }
 
@@ -174,7 +278,8 @@ impl Ppu {
             let ly = self.ly as i16;
 
             let mut sprites = self
-                .sprites
+                .vram
+                .sprites()
                 .iter()
                 .filter(|sp| {
                     sp.y <= ly
@@ -212,21 +317,21 @@ impl Ppu {
                 } else {
                     sprite.tile_index
                 };
-                let tile = self.tiles[tile_index as usize];
+                let tile = self.vram.tile(0, tile_index as usize);
 
                 // only draw sprite pixels
                 for x in 0..8 {
                     let screen_x = sprite.x + x;
 
                     let tile_x = if sprite.flip_x { 7 - x } else { x };
-                    let color = tile[tile_y as usize][tile_x as usize];
+                    let color_index = tile[tile_y as usize][tile_x as usize];
 
                     let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
-                    if on_screen && color != TileValue::B00 {
+                    if on_screen && color_index != TileValue::B00 {
                         if sprite.above_bg || bg_row[screen_x as usize] == TileValue::B00 {
-                            let color_index = self.obj_palettes[sprite.palette as usize][color];
+                            let color = self.obj_palette.color(sprite.palette, color_index);
                             self.frame_buffer[(fb_offset + screen_x as usize * 3)..][0..3]
-                                .copy_from_slice(&COLOR_PALETTE[color_index]);
+                                .copy_from_slice(color);
                         }
                     }
                 }
@@ -249,49 +354,47 @@ impl Ppu {
         //     -----------------------------     ---------
         // ly            0 - 143                 144 - 153
         match self.mode {
-            Mode::OamSearch => {
+            LcdMode::OamSearch => {
                 if self.clocks >= 80 {
                     self.clocks -= 80;
-                    self.mode = Mode::Transfer;
+                    self.mode = LcdMode::Transfer;
                 }
             }
-            Mode::Transfer => {
+            LcdMode::Transfer => {
                 if self.clocks >= 172 {
                     self.clocks -= 172;
-                    self.mode = Mode::HBlank;
+                    self.mode = LcdMode::HBlank;
 
                     self.render_line();
                     stat_interrupt = self.stat.contains(STAT::HBLANK_INTERRUPT);
                 }
             }
-            Mode::HBlank => {
+            LcdMode::HBlank => {
                 if self.clocks >= 204 {
                     self.clocks -= 204;
                     self.ly += 1;
-
-                    if self.ly == 143 {
-                        // last line lost ???
-                        self.render_line();
-                        self.mode = Mode::VBlank;
+                    
+                    if self.ly == 144 {
+                        self.mode = LcdMode::VBlank;
 
                         interrupts.request_interrupt(Interrupt::VBlank);
                         stat_interrupt = self.stat.contains(STAT::VBLANK_INTERRUPT);
                     } else {
-                        self.mode = Mode::OamSearch;
+                        self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
                     }
                 }
             }
-            Mode::VBlank => {
+            LcdMode::VBlank => {
                 if self.clocks >= 456 {
                     self.clocks -= 456;
                     self.ly += 1;
 
-                    if self.ly >= 153 {
+                    if self.ly == 154 {
                         std::mem::swap(&mut self.frame_buffer, &mut self.back_buffer);
 
                         self.ly = 0;
-                        self.mode = Mode::OamSearch;
+                        self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
                     }
                 }
@@ -309,27 +412,9 @@ impl Ppu {
     pub fn read(&self, addr: u16) -> u8 {
         let addr = addr as usize;
         match addr {
-            0x8000..=0x97ff => {
-                if self.mode != Mode::Transfer {
-                    self.tile_sets[addr - 0x8000]
-                } else {
-                    0xff
-                }
-            }
-            0x9800..=0x9fff => {
-                if self.mode != Mode::Transfer {
-                    self.tile_maps[addr - 0x9800]
-                } else {
-                    0xff
-                }
-            }
-            0xfe00..=0xfe9f => {
-                if self.mode == Mode::VBlank || self.mode == Mode::HBlank {
-                    self.sprite_table[addr - 0xfe00]
-                } else {
-                    0xff
-                }
-            }
+            0x8000..=0x97ff => self.vram.read_tile(addr - 0x8000, self.mode),
+            0x9800..=0x9fff => self.vram.read_map(addr - 0x9800, self.mode),
+            0xfe00..=0xfe9f => self.vram.read_sprite(addr - 0xfe00, self.mode),
 
             0xff40 => self.lcdc.bits(),
             0xff41 => self.stat.bits() | (self.mode as u8),
@@ -337,64 +422,66 @@ impl Ppu {
             0xff43 => self.scx,
             0xff44 => self.ly,
             0xff45 => self.lyc,
-            0xff47 => self.bg_palette.to_u8(),
-            0xff48 => self.obj_palettes[0].to_u8(),
-            0xff49 => self.obj_palettes[1].to_u8(),
+            0xff47 => self.bg_palette.read_dmg(0),
+            0xff48 => self.obj_palette.read_dmg(0),
+            0xff49 => self.obj_palette.read_dmg(1),
 
             0xff4a => self.winy,
             0xff4b => self.winx,
 
-            _ => unreachable!(),
+            0xff4f if self.cgb => self.vram.bank(),
+            0xff68 if self.cgb => self.bg_palette.read_index(),
+            0xff69 if self.cgb => self.bg_palette.read_data(),
+            0xff6a if self.cgb => self.obj_palette.read_index(),
+            0xff6b if self.cgb => self.obj_palette.read_data(),
+
+            _ => 0xff,
         }
     }
 
     pub fn write(&mut self, addr: u16, b: u8) {
         let addr = addr as usize;
         match addr {
-            0x8000..=0x97ff => {
-                // causing donkey kong land 2 sprites corruption (´。＿。｀)
-                // if self.mode != Mode::Transfer {
-                self.update_tiles(addr - 0x8000, b);
-                // }
-            }
-            0x9800..=0x9fff => {
-                if self.mode != Mode::Transfer {
-                    self.tile_maps[addr - 0x9800] = b;
-                }
-            }
-            0xfe00..=0xfe9f => {
-                if self.mode == Mode::VBlank || self.mode == Mode::HBlank {
-                    self.update_sprites(addr - 0xfe00, b);
-                }
-            }
+            0x8000..=0x97ff => self.vram.write_tile(addr - 0x8000, b, self.mode),
+            0x9800..=0x9fff => self.vram.write_map(addr - 0x9800, b, self.mode),
+            0xfe00..=0xfe9f => self.vram.write_sprite(addr - 0xfe00, b, self.mode),
 
             0xff40 => {
                 let new = LCDC::from_bits(b).unwrap();
                 if !new.contains(LCDC::LCD_ON) && self.lcdc.contains(LCDC::LCD_ON) {
-                    assert!(self.mode == Mode::VBlank);
+                    // assert!(self.mode == LcdMode::VBlank);
 
                     self.ly = 0;
                     self.clocks = 0;
-                    self.mode = Mode::HBlank;
+                    self.mode = LcdMode::HBlank;
                 }
                 if new.contains(LCDC::LCD_ON) && !self.lcdc.contains(LCDC::LCD_ON) {
-                    self.mode = Mode::HBlank;
+                    self.mode = LcdMode::HBlank;
                 }
                 self.lcdc = new;
             }
-            0xff41 => self.stat = self.stat & STAT::COINCIDENCE | STAT::from_bits_truncate(b),
+            0xff41 => {
+                self.stat =
+                    self.stat & STAT::COINCIDENCE | STAT::from_bits_truncate(b & 0b0111_1000)
+            }
             0xff42 => self.scy = b,
             0xff43 => self.scx = b,
             0xff44 => {}
             0xff45 => self.lyc = b,
-            0xff47 => self.bg_palette = Palette::from_u8(b),
-            0xff48 => self.obj_palettes[0] = Palette::from_u8(b),
-            0xff49 => self.obj_palettes[1] = Palette::from_u8(b),
+            0xff47 if !self.cgb => self.bg_palette.write_dmg(0, b),
+            0xff48 if !self.cgb => self.obj_palette.write_dmg(0, b),
+            0xff49 if !self.cgb => self.obj_palette.write_dmg(1, b),
 
             0xff4a => self.winy = b,
             0xff4b => self.winx = b,
 
-            _ => unreachable!(),
+            0xff4f if self.cgb => self.vram.switch_bank(b),
+            0xff68 if self.cgb => self.bg_palette.write_index(b),
+            0xff69 if self.cgb => self.bg_palette.write_data(b),
+            0xff6a if self.cgb => self.obj_palette.write_index(b),
+            0xff6b if self.cgb => self.obj_palette.write_data(b),
+
+            _ => {}
         }
     }
 
@@ -402,79 +489,11 @@ impl Ppu {
         self.back_buffer.as_ref()
     }
 
-    fn update_tiles(&mut self, addr: usize, data: u8) {
-        self.tile_sets[addr] = data;
-
-        // 384 tiles * 16 bytes
-        // 0001 1111 1111 1110
-        // 000T TTTT TTTT YYY0
-        let addr = addr & 0x1ffe;
-
-        let tile = &mut self.tiles[addr >> 4];
-        let y = (addr >> 1) & 0b0111;
-
-        for x in 0..8 {
-            let mask = 1 << (7 - x);
-            let lsb = mask & self.tile_sets[addr];
-            let msb = mask & self.tile_sets[addr + 1];
-
-            tile[y][x] = match (msb == 0, lsb == 0) {
-                (true, true) => TileValue::B00,
-                (true, false) => TileValue::B01,
-                (false, true) => TileValue::B10,
-                (false, false) => TileValue::B11,
-            };
-        }
-    }
-
     pub fn dma_write(&mut self, addr: u16, data: u8) {
-        self.update_sprites(addr as usize, data);
-    }
-
-    fn update_sprites(&mut self, addr: usize, data: u8) {
-        self.sprite_table[addr] = data;
-
-        let sprite = &mut self.sprites[addr >> 2];
-        match addr & 0x03 {
-            0x00 => sprite.y = data as i16 - 16,
-            0x01 => sprite.x = data as i16 - 8,
-            0x02 => sprite.tile_index = data,
-            0x03 => {
-                sprite.above_bg = (data & 0b1000_0000) == 0;
-                sprite.flip_y = (data & 0b0100_0000) != 0;
-                sprite.flip_x = (data & 0b0010_0000) != 0;
-                sprite.palette = (data & 0b0001_0000) >> 4;
-                // sprite.vram_bank_cgb = (data & 0b0000_1000) >> 3;
-                // sprite.palette_cgb = data & 0b0000_0111;
-            }
-            _ => unreachable!(),
-        }
+        // write condition is always true
+        self.vram.write_sprite(addr as usize, data, LcdMode::VBlank);
     }
 }
-
-#[derive(Default, Copy, Clone)]
-struct Sprite {
-    x: i16,
-    y: i16,
-    tile_index: u8,
-    above_bg: bool,
-    flip_y: bool,
-    flip_x: bool,
-    palette: u8,
-    // vram_bank_cgb: u8,
-    // palette_cgb: u8,
-}
-
-#[derive(Copy, Clone, PartialEq, Eq)]
-#[repr(u8)]
-enum TileValue {
-    B00 = 0,
-    B01 = 1,
-    B10 = 2,
-    B11 = 3,
-}
-
-type Tile = [[TileValue; 8]; 8];
 
 bitflags! {
     #[derive(Default)]
@@ -516,46 +535,9 @@ bitflags! {
 
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
-enum Mode {
+pub enum LcdMode {
     HBlank = 0,
     VBlank = 1,
     OamSearch = 2,
     Transfer = 3,
-}
-
-#[derive(Copy, Clone)]
-struct Palette {
-    pal: [usize; 4],
-}
-
-impl Default for Palette {
-    fn default() -> Palette {
-        Palette { pal: [0, 1, 2, 3] }
-    }
-}
-
-impl Palette {
-    fn from_u8(byte: u8) -> Palette {
-        let byte = byte as usize;
-        Palette {
-            pal: [
-                (byte & 0b0000_0011) >> 0,
-                (byte & 0b0000_1100) >> 2,
-                (byte & 0b0011_0000) >> 4,
-                (byte & 0b1100_0000) >> 6,
-            ],
-        }
-    }
-
-    fn to_u8(&self) -> u8 {
-        ((self.pal[3] << 6) | (self.pal[2] << 4) | (self.pal[1] << 2) | (self.pal[0] << 0)) as u8
-    }
-}
-
-impl Index<TileValue> for Palette {
-    type Output = usize;
-
-    fn index(&self, tile: TileValue) -> &Self::Output {
-        &self.pal[tile as usize]
-    }
 }

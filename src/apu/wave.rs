@@ -67,6 +67,7 @@ impl Wave {
         self.dac = if data & 0b1000_0000 != 0 {
             DacMode::On
         } else {
+            self.mode = ChannelMode::Off;
             DacMode::Off
         };
     }

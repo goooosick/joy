@@ -27,9 +27,9 @@ impl Mixer {
             so2 += self.so2_masks[i] & chs[i];
         }
 
-        // (0..15) * 4 maps to (0..120)
-        so1 = ((so1 as u16 * self.so1_volume as u16) / 4) as u8;
-        so2 = ((so2 as u16 * self.so2_volume as u16) / 4) as u8;
+        // (0..15) * 4 + 128 maps to (128..248)
+        so1 = ((so1 as u16 * self.so1_volume as u16) / 4) as u8 + 128;
+        so2 = ((so2 as u16 * self.so2_volume as u16) / 4) as u8 + 128;
 
         (so2, so1)
     }

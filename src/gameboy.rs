@@ -8,6 +8,13 @@ mod ins;
 mod ops;
 mod reg;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
+enum SpeedMode {
+    Normal = 0x00,
+    Double = 0x80,
+}
+
 pub struct GameBoy {
     reg: Reg,
     mem: Memory,
@@ -23,19 +30,27 @@ pub struct GameBoy {
     interrupt_enable_delay: bool,
     halt: bool,
 
+    hdma_src: u16,
+    hdma_dst: u16,
+
+    cgb: bool,
+    mode: SpeedMode,
+    prepare_speed_switch: bool,
+
     cycles: u32,
     debug_output: bool,
 }
 
 impl GameBoy {
     pub fn new(cart: Cartridge) -> Self {
+        let cgb = cart.cgb();
         let mut gameboy = GameBoy {
             cart,
-            mem: Memory::new(),
+            mem: Memory::new(cgb),
             reg: Default::default(),
 
             apu: Apu::new(),
-            ppu: Ppu::new(),
+            ppu: Ppu::new(cgb),
             timer: Timer::new(),
             joypad: Joypad::new(),
             interrupt_handler: InterruptHandler::new(),
@@ -45,6 +60,13 @@ impl GameBoy {
             halt: false,
             interrupt_master_enable: true,
             interrupt_enable_delay: false,
+
+            hdma_src: 0,
+            hdma_dst: 0,
+
+            cgb,
+            mode: SpeedMode::Normal,
+            prepare_speed_switch: false,
 
             debug_output: false,
         };
@@ -68,6 +90,10 @@ impl GameBoy {
         self.reg.hl = 0x014d;
         self.reg.sp = 0xfffe;
         self.reg.pc = 0x0100;
+
+        if self.cgb {
+            self.reg.a = 0x11;
+        }
 
         self.write_io(0x05, 0x00); // TIMA
         self.write_io(0x06, 0x00); // TMA
@@ -106,7 +132,7 @@ impl GameBoy {
         self.cycles = 0;
     }
 
-    pub fn step(&mut self) -> u32 {
+    pub fn debug_output(&self) {
         if self.debug_output {
             let op = self.read(self.reg.pc);
             print!("{:?} (cy: {})", self.reg, self.cycles);
@@ -119,7 +145,9 @@ impl GameBoy {
             };
             println!(" [{:02x}] {}", op, desc);
         }
+    }
 
+    pub fn step(&mut self) -> u32 {
         let cycles = self.cycles;
 
         self.handle_interrupts();
@@ -143,13 +171,7 @@ impl GameBoy {
             self.cycles += 1;
         };
 
-        let cycles = self.cycles - cycles;
-        self.timer.update(cycles * 4, &mut self.interrupt_handler);
-        self.ppu.update(cycles * 4, &mut self.interrupt_handler);
-        // here to divide the audio frequency
-        self.apu.update(cycles * 4 / AUDIO_FREQ_DIVIDER);
-
-        cycles
+        self.cycles - cycles
     }
 
     fn handle_interrupts(&mut self) {
@@ -176,10 +198,21 @@ impl GameBoy {
         self.joypad.set_input(input);
 
         let mut current = 0;
-        const MAX_CYCLES: u32 = GB_CLOCK_SPEED / GB_DEVICE_FPS / 4;
+        let max_cycles = GB_CLOCK_SPEED / GB_DEVICE_FPS / 4;
+        let speed_multiplier = if self.mode == SpeedMode::Normal { 1 } else { 2 };
 
-        while current < MAX_CYCLES {
-            current += self.step();
+        self.debug_output = true;
+
+        while current < max_cycles * speed_multiplier {
+            let cycles = self.step();
+
+            self.timer.update(cycles * 4, &mut self.interrupt_handler);
+            self.ppu
+                .update(cycles * 4 / speed_multiplier, &mut self.interrupt_handler);
+            self.apu
+                .update(cycles * 4 / speed_multiplier / AUDIO_FREQ_DIVIDER);
+
+            current += cycles;
             self.joypad.update(&mut self.interrupt_handler);
         }
     }
@@ -226,6 +259,17 @@ impl GameBoy {
 
             0xff46 => 0, // dma
             0xff40..=0xff4b => self.ppu.read(addr),
+            0xff4f => self.ppu.read(addr),
+            0xff68..=0xff6b => self.ppu.read(addr),
+
+            0xff4d if self.cgb => self.mode as u8 | (self.prepare_speed_switch as u8),
+            0xff51 if self.cgb => (self.hdma_src >> 8) as u8,
+            0xff52 if self.cgb => self.hdma_src as u8,
+            0xff53 if self.cgb => (self.hdma_dst >> 8) as u8,
+            0xff54 if self.cgb => self.hdma_dst as u8,
+            0xff55 if self.cgb => 0xff,
+
+            0xff70 if self.cgb => self.mem.wram_bank(),
 
             _ => self.mem.read(addr),
         }
@@ -248,6 +292,19 @@ impl GameBoy {
 
             0xff46 => self.dma(data), // dma
             0xff40..=0xff4b => self.ppu.write(addr, data),
+            0xff4f => self.ppu.write(addr, data),
+            0xff68..=0xff6b => self.ppu.write(addr, data),
+
+            0xff4d if self.cgb => self.prepare_speed_switch = (data & 0b01) != 0,
+            0xff51 if self.cgb => self.hdma_src = (self.hdma_src & 0xff) | ((data as u16) << 8),
+            0xff52 if self.cgb => self.hdma_src = (self.hdma_src & 0xff00) | ((data as u16) & 0xf0),
+            0xff53 if self.cgb => {
+                self.hdma_dst = (self.hdma_dst & 0xff) | ((data as u16 & 0b1_1111) << 8) | 0x8000
+            }
+            0xff54 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff00) | ((data as u16) & 0xf0),
+            0xff55 if self.cgb => self.hdma(data),
+
+            0xff70 if self.cgb => self.mem.switch_wram_bank(data),
 
             _ => self.mem.write(addr, data),
         }
@@ -258,6 +315,16 @@ impl GameBoy {
         let src = (addr as u16) << 8;
         for offset in 0x00..0xa0 {
             self.ppu.dma_write(offset, self.read(src + offset));
+        }
+    }
+
+    fn hdma(&mut self, data: u8) {
+        let len = ((data & 0x7f) as u16 + 1) << 4;
+
+        assert!(self.hdma_dst >= 0x8000 && (self.hdma_dst + len - 1) <= 0x9fff);
+        for offset in 0x00..len {
+            self.ppu
+                .write(self.hdma_dst + offset, self.read(self.hdma_src + offset));
         }
     }
 

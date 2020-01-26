@@ -16,6 +16,10 @@ impl FrameSequencer {
         }
     }
 
+    pub fn set_step(&mut self, step: u8) {
+        self.step = step;
+    }
+
     pub fn next(&mut self) -> Option<u8> {
         if self.timer.tick() {
             self.step = (self.step + 1) % 8;

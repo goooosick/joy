@@ -70,7 +70,7 @@ impl MemoryBankController for MBC5 {
                 }
             }
 
-            _ => unreachable!(),
+            _ => {}
         }
     }
 

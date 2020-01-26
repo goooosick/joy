@@ -19,6 +19,7 @@ pub struct Cartridge {
 
     entry_point: u16,
     title: String,
+    cgb: bool,
 }
 
 impl Cartridge {
@@ -37,16 +38,27 @@ impl Cartridge {
     pub fn title(&self) -> String {
         self.title.clone()
     }
+
+    pub fn cgb(&self) -> bool {
+        self.cgb
+    }
 }
 
 pub fn load_cartridge<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Cartridge> {
     let rom = std::fs::read(path)?;
     let entry = 0x100;
 
-    let title = std::str::from_utf8(&rom[0x134..=0x143])
-        .unwrap_or("unkown")
-        .trim_end_matches(|n| n == 0 as char)
-        .to_owned();
+    let title = std::str::from_utf8(
+        rom[0x134..=0x142]
+            .iter()
+            .copied()
+            .take_while(|x| *x != 0)
+            .collect::<Vec<u8>>()
+            .as_slice(),
+    )
+    .unwrap_or("unkown")
+    .trim_end_matches(|n| n == 0 as char)
+    .to_owned();
 
     let rom_size = 0x8000 << rom[0x148];
     let ram_size = match rom[0x149] {
@@ -58,6 +70,7 @@ pub fn load_cartridge<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Car
     };
     assert_eq!(rom_size, rom.len());
 
+    let cgb_flag = rom[0x0143];
     let cart_type = rom[0x147];
     let mut mbc: Box<dyn MemoryBankController> = match cart_type {
         0x00 => Box::new(MBC0::new()),
@@ -68,10 +81,11 @@ pub fn load_cartridge<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Car
         _ => panic!("unimplemented type: 0x{:02x}", cart_type),
     };
 
-    println!("cart title: {}", title);
-    println!("cart type: 0x{:02x} - {}", cart_type, mbc.mbc_type());
-    println!("rom size: 0x{:04x}", rom_size);
-    println!("ram size: 0x{:04x}", ram_size);
+    println!("title   : {}", title);
+    println!("mbc type: 0x{:02x} - {}", cart_type, mbc.mbc_type());
+    println!("rom size: 0x{:06x}", rom_size);
+    println!("ram size: 0x{:06x}", ram_size);
+    println!("cgb flag: 0x{:02x}", cgb_flag);
 
     load_save(mbc.get_ram_mut(), title.as_str());
     Ok(Cartridge {
@@ -79,6 +93,7 @@ pub fn load_cartridge<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Car
         mbc,
         entry_point: entry,
         title,
+        cgb: cgb_flag == 0xc0 || cgb_flag == 0x80,
     })
 }
 

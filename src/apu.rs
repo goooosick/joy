@@ -51,28 +51,28 @@ impl Apu {
         match addr {
             // square 1
             0xff10 => self.regs[offset] | 0x80,
-            0xff11 => self.regs[offset] | 0x7f,
-            0xff12 => self.regs[offset],
-            0xff13 => self.regs[offset],
+            0xff11 => self.regs[offset] | 0x3f,
+            0xff12 => self.regs[offset] | 0x00,
+            0xff13 => self.regs[offset] | 0xff,
             0xff14 => self.regs[offset] | 0xbf,
 
             // square 2
-            0xff16 => self.regs[offset] | 0xbf,
-            0xff17 => self.regs[offset],
-            0xff18 => self.regs[offset],
+            0xff16 => self.regs[offset] | 0x3f,
+            0xff17 => self.regs[offset] | 0x00,
+            0xff18 => self.regs[offset] | 0xff,
             0xff19 => self.regs[offset] | 0xbf,
 
             // wave
             0xff1a => self.regs[offset] | 0x7f,
-            0xff1b => self.regs[offset],
+            0xff1b => self.regs[offset] | 0xff,
             0xff1c => self.regs[offset] | 0x9f,
-            0xff1d => self.regs[offset],
+            0xff1d => self.regs[offset] | 0xff,
             0xff1e => self.regs[offset] | 0xbf,
 
             // noise
-            0xff20 => self.regs[offset],
-            0xff21 => self.regs[offset],
-            0xff22 => self.regs[offset],
+            0xff20 => self.regs[offset] | 0xff,
+            0xff21 => self.regs[offset] | 0x00,
+            0xff22 => self.regs[offset] | 0x00,
             0xff23 => self.regs[offset] | 0xbf,
 
             0xff24 => self.regs[offset],
@@ -87,8 +87,10 @@ impl Apu {
     }
 
     pub fn write(&mut self, addr: u16, data: u8) {
-        if !self.sound_enable && addr != 0xff26 {
-            return;
+        if !self.sound_enable {
+            if addr != 0xff20 && addr != 0xff26 {
+                return;
+            }
         }
 
         self.regs[addr as usize - 0xff10] = data;
@@ -121,7 +123,8 @@ impl Apu {
             0xff26 => {
                 if self.sound_enable && (data & 0b1000_0000 == 0) {
                     self.sound_off();
-                } else if data & 0b1000_0000 != 0 {
+                } else if !self.sound_enable && (data & 0b1000_0000 != 0) {
+                    self.frameseq.set_step(7);
                     self.sound_enable = true;
                 }
             }
@@ -141,10 +144,12 @@ impl Apu {
     }
 
     fn sound_off(&mut self) {
-        self.sound_enable = false;
-        for addr in 0xff10..0xff40 {
-            self.write(addr, 0);
+        for addr in 0xff10..0xff30 {
+            if addr != 0xff26 {
+                self.write(addr, 0);
+            }
         }
+        self.sound_enable = false;
     }
 
     pub fn update(&mut self, clocks: u32) {
@@ -164,8 +169,8 @@ impl Apu {
             }
         } else {
             for _ in 0..clocks {
-                self.audio_buffer.push(0);
-                self.audio_buffer.push(0);
+                self.audio_buffer.push(128);
+                self.audio_buffer.push(128);
             }
         }
     }

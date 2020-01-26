@@ -1,4 +1,5 @@
 use super::GameBoy;
+use super::SpeedMode;
 
 impl GameBoy {
     pub fn dispatch_op(&mut self, op: u8) {
@@ -21,8 +22,19 @@ impl GameBoy {
             0x0e => self.reg.c = self.fetch_byte(),
             0x0f => { self.reg.a = self.rrc(self.reg.a); self.reg.f.zero = false; },
 
-            // Note: `stop` instruction skips the next op 
-            0x10 => {let _ = self.fetch_byte(); },
+            0x10 => {
+                // Note: `stop` instruction skips the next op 
+                let _ = self.fetch_byte();
+
+                if self.prepare_speed_switch {
+                    if self.mode == SpeedMode::Normal {
+                        self.mode = SpeedMode::Double;
+                    } else {
+                        self.mode = SpeedMode::Normal;
+                    }
+                    self.prepare_speed_switch = false;
+                }
+            },
             0x11 => self.reg.de = self.fetch_word(),
             0x12 => self.write(self.reg.de, self.reg.a),
             0x13 => self.reg.de= self.reg.de.wrapping_add(1),
