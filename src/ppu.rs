@@ -86,11 +86,8 @@ impl Ppu {
                     index + (pattern_offset * (index < 0x80) as usize) * 0x100
                 };
 
-                let mut tile_x = tilemap_x & 0x07;
-                if attr.flip_x {
-                    tile_x = 7 - tile_x;
-                }
-                let tile_y = if attr.flip_y { 7 - tile_y } else { tile_y };
+                let tile_x = (tilemap_x & 7) ^ ((attr.flip_x as usize) * 7);
+                let tile_y = tile_y ^ ((attr.flip_y as usize) * 7);
 
                 let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
                 let color = self.bg_palette.color(attr.bg_pal_index, color_index);
@@ -122,7 +119,9 @@ impl Ppu {
                     index + (pattern_offset * (index < 0x80) as usize) * 0x100
                 };
 
-                let tile_x = tilemap_x & 0x07;
+                let tile_x = (tilemap_x & 7) ^ ((attr.flip_x as usize) * 7);
+                let tile_y = tile_y ^ ((attr.flip_y as usize) * 7);
+
                 let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
                 let color = self.bg_palette.color(attr.bg_pal_index, color_index);
 
@@ -152,11 +151,7 @@ impl Ppu {
 
             for sprite in sprites.iter().rev() {
                 let sprite_y = (ly - sprite.y) as usize;
-
-                let mut tile_y = sprite_y & 0x07;
-                if sprite.flip_y {
-                    tile_y = 7 - tile_y;
-                }
+                let tile_y = (sprite_y & 7) ^ ((sprite.flip_y as usize) * 7);
 
                 let tile_index = if sprite_size == 16 {
                     if sprite.flip_y ^ (sprite_y < 8) {
@@ -172,8 +167,8 @@ impl Ppu {
                 for x in 0..8 {
                     let screen_x = sprite.x + x;
 
-                    let tile_x = if sprite.flip_x { 7 - x } else { x };
-                    let color_index = tile[tile_y as usize][tile_x as usize];
+                    let tile_x = x as usize ^ ((sprite.flip_x as usize) * 7);
+                    let color_index = tile[tile_y][tile_x];
 
                     let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
                     if on_screen && color_index != TileValue::B00 {
@@ -295,12 +290,8 @@ impl Ppu {
             // draw reverse, so samller x is on top
             for sprite in sprites.iter().rev() {
                 let sprite_y = (ly - sprite.y) as usize;
-
                 // sprite size indepedent
-                let mut tile_y = sprite_y & 0x07;
-                if sprite.flip_y {
-                    tile_y = 7 - tile_y;
-                }
+                let tile_y = (sprite_y & 7) ^ (sprite.flip_y as usize * 7);
 
                 // http://problemkaputt.de/pandocs.htm#vramspriteattributetableoam
                 //              flip_y                   upper "NN AND FEh"
@@ -323,8 +314,8 @@ impl Ppu {
                 for x in 0..8 {
                     let screen_x = sprite.x + x;
 
-                    let tile_x = if sprite.flip_x { 7 - x } else { x };
-                    let color_index = tile[tile_y as usize][tile_x as usize];
+                    let tile_x = x as usize ^ (sprite.flip_x as usize * 7);
+                    let color_index = tile[tile_y][tile_x];
 
                     let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
                     if on_screen && color_index != TileValue::B00 {
@@ -373,7 +364,7 @@ impl Ppu {
                 if self.clocks >= 204 {
                     self.clocks -= 204;
                     self.ly += 1;
-                    
+
                     if self.ly == 144 {
                         self.mode = LcdMode::VBlank;
 
