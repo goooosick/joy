@@ -17,10 +17,11 @@ pub struct VideoRam {
     attr_map: Box<[BgAttr; TILEMAP_SIZE]>,
 
     vram_bank: usize,
+    cgb: bool,
 }
 
 impl VideoRam {
-    pub fn new() -> Self {
+    pub fn new(cgb: bool) -> Self {
         let empty_tile = [[TileValue::B00; 8]; 8];
         VideoRam {
             sprite_table: Box::new([0u8; OAM_SIZE]),
@@ -36,6 +37,7 @@ impl VideoRam {
             attr_map: Box::new([Default::default(); TILEMAP_SIZE]),
 
             vram_bank: 0,
+            cgb,
         }
     }
 
@@ -72,9 +74,13 @@ impl VideoRam {
                     sprite.above_bg = (data & 0b1000_0000) == 0;
                     sprite.flip_y = (data & 0b0100_0000) != 0;
                     sprite.flip_x = (data & 0b0010_0000) != 0;
-                    sprite.palette = (data & 0b0001_0000) >> 4;
-                    sprite.vram_bank_cgb = (data & 0b0000_1000) >> 3;
-                    sprite.palette_cgb = data & 0b0000_0111;
+                    if self.cgb {
+                        sprite.palette = data & 0b0000_0111;
+                        sprite.vram_bank = (data & 0b0000_1000) >> 3;
+                    } else {
+                        sprite.palette = (data & 0b0001_0000) >> 4;
+                        sprite.vram_bank = 0;
+                    }
                 }
                 _ => unreachable!(),
             }
@@ -94,7 +100,6 @@ impl VideoRam {
     }
 
     pub fn write_tile(&mut self, addr: usize, data: u8, mode: LcdMode) {
-        // causing donkey kong land 2 sprites corruption (´。＿。｀)
         if mode == LcdMode::Transfer {
             return;
         }
@@ -163,8 +168,7 @@ pub struct Sprite {
     pub flip_y: bool,
     pub flip_x: bool,
     pub palette: u8,
-    pub vram_bank_cgb: u8,
-    pub palette_cgb: u8,
+    pub vram_bank: u8,
 }
 
 #[derive(Default, Copy, Clone)]

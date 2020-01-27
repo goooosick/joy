@@ -121,6 +121,7 @@ fn save_game(ram: Option<&[u8]>, title: &str) {
         if ram.len() > 0 {
             let name = title.to_lowercase() + ".sav";
             if let Ok(mut file) = OpenOptions::new()
+                .create(true)
                 .write(true)
                 .truncate(true)
                 .open(name.as_str())

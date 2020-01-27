@@ -185,7 +185,7 @@ impl GameBoy {
             if self.interrupt_master_enable {
                 if let Some(addr) = self.interrupt_handler.service_interrupt() {
                     self.interrupt_master_enable = false;
-                    self.cycles += 5;
+                    self.cycles += 1;
 
                     self.push(self.reg.pc);
                     self.reg.pc = addr;

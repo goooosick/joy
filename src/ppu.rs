@@ -41,7 +41,7 @@ impl Ppu {
             frame_buffer: Box::new([0u8; FRAME_BUFFER_SIZE]),
             back_buffer: Box::new([0u8; FRAME_BUFFER_SIZE]),
 
-            vram: VideoRam::new(),
+            vram: VideoRam::new(cgb),
 
             lcdc: Default::default(),
             stat: Default::default(),
@@ -62,141 +62,15 @@ impl Ppu {
         }
     }
 
-    fn render_line_cgb(&mut self) {
+    // since the default attrs map is valid for dmg, the
+    // rendering of dmg and cgb is unified.
+    fn render_line(&mut self) {
         let pattern_offset = (!self.lcdc.contains(LCDC::TILE_PATTERN_TABLE)) as usize;
         let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
         let mut bg_above = [false; GB_LCD_WIDTH];
         let mut bg_b00 = [false; GB_LCD_WIDTH];
 
-        // background
-        {
-            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::BG_TILE_TABLE) as usize);
-
-            let tilemap_y = self.ly.wrapping_add(self.scy) as usize;
-            let tilemap_offset = tilemap_offset + (tilemap_y / 8) * 32;
-            let tile_y = tilemap_y & 0x07;
-
-            for x in 0..GB_LCD_WIDTH {
-                let tilemap_x = (x as u8).wrapping_add(self.scx) as usize;
-                let tilemap_index = tilemap_offset + tilemap_x / 8;
-                let attr = self.vram.attrmap(tilemap_index);
-
-                let tile_index = {
-                    let index = self.vram.tilemap(tilemap_index);
-                    index + (pattern_offset * (index < 0x80) as usize) * 0x100
-                };
-
-                let tile_x = (tilemap_x & 7) ^ ((attr.flip_x as usize) * 7);
-                let tile_y = tile_y ^ ((attr.flip_y as usize) * 7);
-
-                let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
-                let color = self.bg_palette.color(attr.bg_pal_index, color_index);
-
-                self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
-                bg_above[x] = attr.above_all;
-                bg_b00[x] = color_index == TileValue::B00;
-            }
-        }
-
-        // window
-        if self.lcdc.contains(LCDC::WINDOW_DISPLAY_ON) && self.ly >= self.winy {
-            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::WINDOW_TILE_TABLE) as usize);
-
-            let tilemap_y = (self.ly - self.winy) as usize;
-            let tilemap_offset = tilemap_offset + (tilemap_y / 8) * 32;
-            let tile_y = tilemap_y & 0x07;
-
-            let win_x = self.winx.saturating_sub(7) as usize;
-            let winx_offset = (7 - (self.winx as isize)).max(0) as usize;
-
-            for (tilemap_x, x) in (win_x..GB_LCD_WIDTH).enumerate() {
-                let tilemap_x = tilemap_x + winx_offset;
-                let tilemap_index = tilemap_offset + tilemap_x / 8;
-                let attr = self.vram.attrmap(tilemap_index);
-
-                let tile_index = {
-                    let index = self.vram.tilemap(tilemap_index);
-                    index + (pattern_offset * (index < 0x80) as usize) * 0x100
-                };
-
-                let tile_x = (tilemap_x & 7) ^ ((attr.flip_x as usize) * 7);
-                let tile_y = tile_y ^ ((attr.flip_y as usize) * 7);
-
-                let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
-                let color = self.bg_palette.color(attr.bg_pal_index, color_index);
-
-                self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
-                bg_above[x] = attr.above_all;
-                bg_b00[x] = color_index == TileValue::B00;
-            }
-        }
-
-        let sprite_above = !self.lcdc.contains(LCDC::BG_DISPLAY_ON);
-        if self.lcdc.contains(LCDC::OBJECT_DISPLAY_ON) {
-            let sprite_size = 8 * (1 + self.lcdc.contains(LCDC::OBJECT_SIZE) as i16);
-            let ly = self.ly as i16;
-
-            let sprites = self
-                .vram
-                .sprites()
-                .iter()
-                .filter(|sp| {
-                    sp.y <= ly
-                        && (sp.y + sprite_size) > ly
-                        && (sp.x + 8 >= 0)
-                        && sp.x < GB_LCD_WIDTH as i16
-                })
-                .take(MAX_SPRITE_PER_LINE)
-                .collect::<Vec<_>>();
-
-            for sprite in sprites.iter().rev() {
-                let sprite_y = (ly - sprite.y) as usize;
-                let tile_y = (sprite_y & 7) ^ ((sprite.flip_y as usize) * 7);
-
-                let tile_index = if sprite_size == 16 {
-                    if sprite.flip_y ^ (sprite_y < 8) {
-                        sprite.tile_index & 0xfe
-                    } else {
-                        sprite.tile_index | 0x01
-                    }
-                } else {
-                    sprite.tile_index
-                };
-                let tile = self.vram.tile(sprite.vram_bank_cgb, tile_index as usize);
-
-                for x in 0..8 {
-                    let screen_x = sprite.x + x;
-
-                    let tile_x = x as usize ^ ((sprite.flip_x as usize) * 7);
-                    let color_index = tile[tile_y][tile_x];
-
-                    let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
-                    if on_screen && color_index != TileValue::B00 {
-                        if sprite_above
-                            || (!bg_above[screen_x as usize]
-                                && (sprite.above_bg || bg_b00[screen_x as usize]))
-                        {
-                            let color = self.obj_palette.color(sprite.palette_cgb, color_index);
-                            self.frame_buffer[(fb_offset + screen_x as usize * 3)..][0..3]
-                                .copy_from_slice(color);
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    fn render_line(&mut self) {
-        if self.cgb {
-            self.render_line_cgb();
-            return;
-        }
-
-        let pattern_offset = (!self.lcdc.contains(LCDC::TILE_PATTERN_TABLE)) as usize;
-        let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
-        let mut bg_row = [TileValue::B00; GB_LCD_WIDTH];
-
-        if self.lcdc.contains(LCDC::BG_DISPLAY_ON) {
+        if self.cgb || self.lcdc.contains(LCDC::BG_DISPLAY_ON) {
             // PRE:
             //     tilemap: 256 x 256 pixels, 32 x 32 tiles, 32 x 32 bytes
             //     lcd screen: 160 x 144 pixels
@@ -216,10 +90,9 @@ impl Ppu {
             for x in 0..GB_LCD_WIDTH {
                 // wrapping around x
                 let tilemap_x = (x as u8).wrapping_add(self.scx) as usize;
-                // x in that tile (tilemap_x % 8)
-                let tile_x = tilemap_x & 0x07;
-
                 let tilemap_index = tilemap_offset + tilemap_x / 8;
+                let attr = self.vram.attrmap(tilemap_index);
+
                 let tile_index = {
                     let index = self.vram.tilemap(tilemap_index);
                     // when using pattern 0, the index is signed
@@ -228,11 +101,16 @@ impl Ppu {
                     index + (pattern_offset * (index < 0x80) as usize) * 0x100
                 };
 
-                let color_index = self.vram.tile(0, tile_index)[tile_y][tile_x];
-                let color = self.bg_palette.color(0, color_index);
+                // x in that tile (tilemap_x % 8)
+                let tile_x = (tilemap_x & 7) ^ ((attr.flip_x as usize) * 7);
+                let tile_y = tile_y ^ ((attr.flip_y as usize) * 7);
+
+                let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
+                let color = self.bg_palette.color(attr.bg_pal_index, color_index);
 
                 self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
-                bg_row[x] = color_index;
+                bg_above[x] = attr.above_all;
+                bg_b00[x] = color_index == TileValue::B00;
             }
         }
 
@@ -251,22 +129,27 @@ impl Ppu {
             // draw from win_x - the left edge of window, but tilemap starts from 0
             for (tilemap_x, x) in (win_x..GB_LCD_WIDTH).enumerate() {
                 let tilemap_x = tilemap_x + winx_offset;
-
                 let tilemap_index = tilemap_offset + tilemap_x / 8;
+                let attr = self.vram.attrmap(tilemap_index);
+
                 let tile_index = {
                     let index = self.vram.tilemap(tilemap_index);
                     index + (pattern_offset * (index < 0x80) as usize) * 0x100
                 };
 
-                let tile_x = tilemap_x & 0x07;
-                let color_index = self.vram.tile(0, tile_index)[tile_y][tile_x];
-                let color = self.bg_palette.color(0, color_index);
+                let tile_x = (tilemap_x & 7) ^ ((attr.flip_x as usize) * 7);
+                let tile_y = tile_y ^ ((attr.flip_y as usize) * 7);
+
+                let color_index = self.vram.tile(attr.vram_bank, tile_index)[tile_y][tile_x];
+                let color = self.bg_palette.color(attr.bg_pal_index, color_index);
 
                 self.frame_buffer[(fb_offset + x * 3)..][0..3].copy_from_slice(color);
-                bg_row[x] = color_index;
+                bg_above[x] = attr.above_all;
+                bg_b00[x] = color_index == TileValue::B00;
             }
         }
 
+        let sprite_above = self.cgb && !self.lcdc.contains(LCDC::BG_DISPLAY_ON);
         if self.lcdc.contains(LCDC::OBJECT_DISPLAY_ON) {
             // sprite size: 8 x 8 or 8 x 16
             let sprite_size = 8 * (1 + self.lcdc.contains(LCDC::OBJECT_SIZE) as i16);
@@ -285,7 +168,9 @@ impl Ppu {
                 .take(MAX_SPRITE_PER_LINE)
                 .collect::<Vec<_>>();
             // why does this sort needed (to fix background-sprite interaction)?
-            sprites.sort_by(|sp0, sp1| sp0.x.cmp(&sp1.x));
+            if !self.cgb {
+                sprites.sort_by(|sp0, sp1| sp0.x.cmp(&sp1.x));
+            }
 
             // draw reverse, so samller x is on top
             for sprite in sprites.iter().rev() {
@@ -308,7 +193,7 @@ impl Ppu {
                 } else {
                     sprite.tile_index
                 };
-                let tile = self.vram.tile(0, tile_index as usize);
+                let tile = self.vram.tile(sprite.vram_bank, tile_index as usize);
 
                 // only draw sprite pixels
                 for x in 0..8 {
@@ -318,8 +203,8 @@ impl Ppu {
                     let color_index = tile[tile_y][tile_x];
 
                     let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
-                    if on_screen && color_index != TileValue::B00 {
-                        if sprite.above_bg || bg_row[screen_x as usize] == TileValue::B00 {
+                    if on_screen && color_index != TileValue::B00 && !bg_above[screen_x as usize] {
+                        if sprite_above || (sprite.above_bg || bg_b00[screen_x as usize]) {
                             let color = self.obj_palette.color(sprite.palette, color_index);
                             self.frame_buffer[(fb_offset + screen_x as usize * 3)..][0..3]
                                 .copy_from_slice(color);
@@ -370,6 +255,8 @@ impl Ppu {
 
                         interrupts.request_interrupt(Interrupt::VBlank);
                         stat_interrupt = self.stat.contains(STAT::VBLANK_INTERRUPT);
+
+                        std::mem::swap(&mut self.frame_buffer, &mut self.back_buffer);
                     } else {
                         self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
@@ -382,9 +269,8 @@ impl Ppu {
                     self.ly += 1;
 
                     if self.ly == 154 {
-                        std::mem::swap(&mut self.frame_buffer, &mut self.back_buffer);
-
                         self.ly = 0;
+
                         self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
                     }
