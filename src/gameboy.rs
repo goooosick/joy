@@ -32,6 +32,8 @@ pub struct GameBoy {
 
     hdma_src: u16,
     hdma_dst: u16,
+    hdma_len: u16,
+    hdma_active: bool,
 
     cgb: bool,
     mode: SpeedMode,
@@ -63,6 +65,8 @@ impl GameBoy {
 
             hdma_src: 0,
             hdma_dst: 0,
+            hdma_len: 0,
+            hdma_active: false,
 
             cgb,
             mode: SpeedMode::Normal,
@@ -185,7 +189,7 @@ impl GameBoy {
             if self.interrupt_master_enable {
                 if let Some(addr) = self.interrupt_handler.service_interrupt() {
                     self.interrupt_master_enable = false;
-                    self.cycles += 1;
+                    self.cycles += 5;
 
                     self.push(self.reg.pc);
                     self.reg.pc = addr;
@@ -212,8 +216,26 @@ impl GameBoy {
             self.apu
                 .update(cycles * 4 / speed_multiplier / AUDIO_FREQ_DIVIDER);
 
+            self.run_hdma();
+
             current += cycles;
             self.joypad.update(&mut self.interrupt_handler);
+        }
+    }
+
+    fn run_hdma(&mut self) {
+        if self.hdma_active && self.ppu.hdma_avaliable() {
+            for i in 0x00..0x10 {
+                self.ppu
+                    .hdma_write(0x8000 + self.hdma_dst + i, self.read(self.hdma_src + i));
+            }
+            self.hdma_src += 0x10;
+            self.hdma_dst += 0x10;
+
+            self.hdma_len -= 1;
+            if self.hdma_len == 0 {
+                self.hdma_active = false;
+            }
         }
     }
 
@@ -267,7 +289,9 @@ impl GameBoy {
             0xff52 if self.cgb => self.hdma_src as u8,
             0xff53 if self.cgb => (self.hdma_dst >> 8) as u8,
             0xff54 if self.cgb => self.hdma_dst as u8,
-            0xff55 if self.cgb => 0xff,
+            0xff55 if self.cgb => {
+                ((!self.hdma_active as u8) << 7) | (self.hdma_len.saturating_sub(1) as u8)
+            }
 
             0xff70 if self.cgb => self.mem.wram_bank(),
 
@@ -297,9 +321,11 @@ impl GameBoy {
 
             0xff4d if self.cgb => self.prepare_speed_switch = (data & 0b01) != 0,
             0xff51 if self.cgb => self.hdma_src = (self.hdma_src & 0xff) | ((data as u16) << 8),
-            0xff52 if self.cgb => self.hdma_src = (self.hdma_src & 0xff00) | (data as u16),
-            0xff53 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff) | ((data as u16) << 8),
-            0xff54 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff00) | (data as u16),
+            0xff52 if self.cgb => self.hdma_src = (self.hdma_src & 0xff00) | ((data & 0xf0) as u16),
+            0xff53 if self.cgb => {
+                self.hdma_dst = (self.hdma_dst & 0xff) | (((data & 0x1f) as u16) << 8)
+            }
+            0xff54 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff00) | ((data & 0xf0) as u16),
             0xff55 if self.cgb => self.hdma(data),
 
             0xff70 if self.cgb => self.mem.switch_wram_bank(data),
@@ -317,17 +343,22 @@ impl GameBoy {
     }
 
     fn hdma(&mut self, data: u8) {
-        let src = self.hdma_src & 0xfff0;
-        let dst = (self.hdma_dst & 0x1ff0) + 0x8000;
-        let len = ((data as u16 & 0x7f) + 1) << 4;
+        self.hdma_len = (data as u16 & 0x7f) + 1;
 
-        // general hdma
-        if data & 0x80 == 0 {
-            for i in 0x00..len {
-                self.ppu.hdma_write(dst + i, self.read(src + i));
-            }
+        if data & 0x80 == 0 && self.hdma_active {
+            self.hdma_active = false;
         } else {
-            println!("hblank hdma");
+            // general hdma
+            if data & 0x80 == 0 {
+                for i in 0x00..(self.hdma_len << 4) {
+                    self.ppu
+                        .hdma_write(0x8000 + self.hdma_dst + i, self.read(self.hdma_src + i));
+                }
+
+                self.hdma_active = false;
+            } else {
+                self.hdma_active = true;
+            }
         }
     }
 

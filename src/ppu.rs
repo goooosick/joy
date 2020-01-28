@@ -11,6 +11,15 @@ mod vram;
 const MAX_SPRITE_PER_LINE: usize = 10;
 const FRAME_BUFFER_SIZE: usize = GB_LCD_WIDTH * GB_LCD_HEIGHT * 3;
 
+#[derive(Copy, Clone, Eq, PartialEq)]
+#[repr(u8)]
+pub enum LcdMode {
+    HBlank = 0,
+    VBlank = 1,
+    OamSearch = 2,
+    Transfer = 3,
+}
+
 pub struct Ppu {
     frame_buffer: Box<[u8; FRAME_BUFFER_SIZE]>,
     back_buffer: Box<[u8; FRAME_BUFFER_SIZE]>,
@@ -28,6 +37,7 @@ pub struct Ppu {
     winy: u8,
     winx: u8,
 
+    hdma_avaliable: bool,
     bg_palette: Palette,
     obj_palette: Palette,
     cgb: bool,
@@ -54,6 +64,7 @@ impl Ppu {
             winy: 0,
             winx: 0,
 
+            hdma_avaliable: false,
             bg_palette: Palette::build(cgb),
             obj_palette: Palette::build(cgb),
             cgb,
@@ -250,6 +261,7 @@ impl Ppu {
                     self.clocks -= 204;
 
                     self.ly += 1;
+                    self.hdma_avaliable = true;
                     self.check_lyc(interrupts);
 
                     if self.ly == 144 {
@@ -385,6 +397,15 @@ impl Ppu {
             _ => unreachable!(),
         }
     }
+
+    pub fn hdma_avaliable(&mut self) -> bool {
+        if self.hdma_avaliable {
+            self.hdma_avaliable = false;
+            true
+        } else {
+            false
+        }
+    }
 }
 
 bitflags! {
@@ -423,13 +444,4 @@ bitflags! {
         /// COINCIDENCE flag (0: lyc != ly, 1: lyc == ly), read-only
         const COINCIDENCE         = 0b0000_0100;
     }
-}
-
-#[derive(Copy, Clone, Eq, PartialEq)]
-#[repr(u8)]
-pub enum LcdMode {
-    HBlank = 0,
-    VBlank = 1,
-    OamSearch = 2,
-    Transfer = 3,
 }
