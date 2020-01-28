@@ -65,19 +65,19 @@ impl Ppu {
     // since the default attrs map is valid for dmg, the
     // rendering of dmg and cgb is unified.
     fn render_line(&mut self) {
-        let pattern_offset = (!self.lcdc.contains(LCDC::TILE_PATTERN_TABLE)) as usize;
+        let pattern_offset = (!self.lcdc.contains(LCDC::BG_TILE_TABLE)) as usize;
         let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
         let mut bg_above = [false; GB_LCD_WIDTH];
         let mut bg_b00 = [false; GB_LCD_WIDTH];
 
-        if self.cgb || self.lcdc.contains(LCDC::BG_DISPLAY_ON) {
+        if self.cgb || self.lcdc.contains(LCDC::BG_ON) {
             // PRE:
             //     tilemap: 256 x 256 pixels, 32 x 32 tiles, 32 x 32 bytes
             //     lcd screen: 160 x 144 pixels
             //     tile: 8 x 8 pixels
 
             // base index of used tilemap
-            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::BG_TILE_TABLE) as usize);
+            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::BG_MAP) as usize);
 
             // wrapping around y
             let tilemap_y = self.ly.wrapping_add(self.scy) as usize;
@@ -114,8 +114,8 @@ impl Ppu {
             }
         }
 
-        if self.lcdc.contains(LCDC::WINDOW_DISPLAY_ON) && self.ly >= self.winy {
-            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::WINDOW_TILE_TABLE) as usize);
+        if self.lcdc.contains(LCDC::WINDOW_ON) && self.ly >= self.winy {
+            let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::WINDOW_MAP) as usize);
 
             // the window always draw from left-upper corner
             let tilemap_y = (self.ly - self.winy) as usize;
@@ -149,8 +149,8 @@ impl Ppu {
             }
         }
 
-        let sprite_above = self.cgb && !self.lcdc.contains(LCDC::BG_DISPLAY_ON);
-        if self.lcdc.contains(LCDC::OBJECT_DISPLAY_ON) {
+        let sprite_above = self.cgb && !self.lcdc.contains(LCDC::BG_ON);
+        if self.lcdc.contains(LCDC::OBJECT_ON) {
             // sprite size: 8 x 8 or 8 x 16
             let sprite_size = 8 * (1 + self.lcdc.contains(LCDC::OBJECT_SIZE) as i16);
             let ly = self.ly as i16;
@@ -248,7 +248,9 @@ impl Ppu {
             LcdMode::HBlank => {
                 if self.clocks >= 204 {
                     self.clocks -= 204;
+
                     self.ly += 1;
+                    self.check_lyc(interrupts);
 
                     if self.ly == 144 {
                         self.mode = LcdMode::VBlank;
@@ -266,6 +268,7 @@ impl Ppu {
             LcdMode::VBlank => {
                 if self.clocks >= 456 {
                     self.clocks -= 456;
+
                     self.ly += 1;
 
                     if self.ly == 154 {
@@ -274,14 +277,22 @@ impl Ppu {
                         self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
                     }
+
+                    self.check_lyc(interrupts);
                 }
             }
         };
 
+        if stat_interrupt {
+            interrupts.request_interrupt(Interrupt::Lcd);
+        }
+    }
+
+    fn check_lyc(&mut self, interrupts: &mut InterruptHandler) {
         let coincidence = self.lyc == self.ly;
         self.stat.set(STAT::COINCIDENCE, coincidence);
 
-        if stat_interrupt || (self.stat.contains(STAT::SCANLINE_INTERRUPT) && coincidence) {
+        if self.stat.contains(STAT::SCANLINE_INTERRUPT) && coincidence {
             interrupts.request_interrupt(Interrupt::Lcd);
         }
     }
@@ -306,7 +317,7 @@ impl Ppu {
             0xff4a => self.winy,
             0xff4b => self.winx,
 
-            0xff4f if self.cgb => self.vram.bank(),
+            0xff4f if self.cgb => self.vram.bank() | 0xfe,
             0xff68 if self.cgb => self.bg_palette.read_index(),
             0xff69 if self.cgb => self.bg_palette.read_data(),
             0xff6a if self.cgb => self.obj_palette.read_index(),
@@ -324,15 +335,10 @@ impl Ppu {
             0xfe00..=0xfe9f => self.vram.write_sprite(addr - 0xfe00, b, self.mode),
 
             0xff40 => {
-                let new = LCDC::from_bits(b).unwrap();
+                let new = LCDC::from_bits_truncate(b);
                 if !new.contains(LCDC::LCD_ON) && self.lcdc.contains(LCDC::LCD_ON) {
-                    // assert!(self.mode == LcdMode::VBlank);
-
                     self.ly = 0;
                     self.clocks = 0;
-                    self.mode = LcdMode::HBlank;
-                }
-                if new.contains(LCDC::LCD_ON) && !self.lcdc.contains(LCDC::LCD_ON) {
                     self.mode = LcdMode::HBlank;
                 }
                 self.lcdc = new;
@@ -370,6 +376,15 @@ impl Ppu {
         // write condition is always true
         self.vram.write_sprite(addr as usize, data, LcdMode::VBlank);
     }
+
+    pub fn hdma_write(&mut self, addr: u16, data: u8) {
+        let addr = addr as usize;
+        match addr {
+            0x8000..=0x97ff => self.vram.write_tile(addr - 0x8000, data, LcdMode::VBlank),
+            0x9800..=0x9fff => self.vram.write_map(addr - 0x9800, data, LcdMode::VBlank),
+            _ => unreachable!(),
+        }
+    }
 }
 
 bitflags! {
@@ -377,20 +392,20 @@ bitflags! {
     pub struct LCDC: u8 {
         /// lcd display enable
         const LCD_ON                = 0b1000_0000;
-        /// select window tile table address, 0=9800-9bff, 1=9c00-9fff
-        const WINDOW_TILE_TABLE     = 0b0100_0000;
+        /// select window map address, 0=9800-9bff, 1=9c00-9fff
+        const WINDOW_MAP            = 0b0100_0000;
         /// window display enable
-        const WINDOW_DISPLAY_ON     = 0b0010_0000;
-        /// select tile pattern table address, 0=8800-97ff, 1=8000-8fff
-        const TILE_PATTERN_TABLE    = 0b0001_0000;
-        /// select background tile table address, 0=9800-9bff, 1=9c00-9fff
-        const BG_TILE_TABLE      = 0b0000_1000;
+        const WINDOW_ON             = 0b0010_0000;
+        /// select bg/window tile address, 0=8800-97ff, 1=8000-8fff
+        const BG_TILE_TABLE         = 0b0001_0000;
+        /// select background map address, 0=9800-9bff, 1=9c00-9fff
+        const BG_MAP                = 0b0000_1000;
         /// select object size, 0=8x8, 1=8x16
         const OBJECT_SIZE           = 0b0000_0100;
         /// object display enable
-        const OBJECT_DISPLAY_ON     = 0b0000_0010;
+        const OBJECT_ON     = 0b0000_0010;
         /// background display enable
-        const BG_DISPLAY_ON         = 0b0000_0001;
+        const BG_ON                 = 0b0000_0001;
     }
 }
 

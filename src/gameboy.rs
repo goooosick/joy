@@ -297,11 +297,9 @@ impl GameBoy {
 
             0xff4d if self.cgb => self.prepare_speed_switch = (data & 0b01) != 0,
             0xff51 if self.cgb => self.hdma_src = (self.hdma_src & 0xff) | ((data as u16) << 8),
-            0xff52 if self.cgb => self.hdma_src = (self.hdma_src & 0xff00) | ((data as u16) & 0xf0),
-            0xff53 if self.cgb => {
-                self.hdma_dst = (self.hdma_dst & 0xff) | ((data as u16 & 0b1_1111) << 8) | 0x8000
-            }
-            0xff54 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff00) | ((data as u16) & 0xf0),
+            0xff52 if self.cgb => self.hdma_src = (self.hdma_src & 0xff00) | (data as u16),
+            0xff53 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff) | ((data as u16) << 8),
+            0xff54 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff00) | (data as u16),
             0xff55 if self.cgb => self.hdma(data),
 
             0xff70 if self.cgb => self.mem.switch_wram_bank(data),
@@ -319,12 +317,17 @@ impl GameBoy {
     }
 
     fn hdma(&mut self, data: u8) {
-        let len = ((data & 0x7f) as u16 + 1) << 4;
+        let src = self.hdma_src & 0xfff0;
+        let dst = (self.hdma_dst & 0x1ff0) + 0x8000;
+        let len = ((data as u16 & 0x7f) + 1) << 4;
 
-        assert!(self.hdma_dst >= 0x8000 && (self.hdma_dst + len - 1) <= 0x9fff);
-        for offset in 0x00..len {
-            self.ppu
-                .write(self.hdma_dst + offset, self.read(self.hdma_src + offset));
+        // general hdma
+        if data & 0x80 == 0 {
+            for i in 0x00..len {
+                self.ppu.hdma_write(dst + i, self.read(src + i));
+            }
+        } else {
+            println!("hblank hdma");
         }
     }
 

@@ -47,7 +47,7 @@ impl Memory {
     }
 
     pub fn wram_bank(&self) -> u8 {
-        self.wram_bank as u8 + 1
+        (self.wram_bank as u8 + 1) | 0xf8
     }
 
     pub fn switch_wram_bank(&mut self, data: u8) {
