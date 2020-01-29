@@ -7,6 +7,7 @@ pub struct MBC5 {
     ram_enable: bool,
 
     max_rom: u16,
+    max_ram: u8,
 }
 
 impl MBC5 {
@@ -18,6 +19,7 @@ impl MBC5 {
             ram_enable: false,
 
             max_rom: (rom_size / 0x4000) as u16,
+            max_ram: (ram_size / 0x2000) as u8,
         }
     }
 }
@@ -46,7 +48,7 @@ impl MemoryBankController for MBC5 {
     fn write(&mut self, addr: u16, data: u8) {
         match addr {
             // enable ram
-            0x0000..=0x1fff => self.ram_enable = data & 0x0f == 0x0a,
+            0x0000..=0x1fff => self.ram_enable = (self.max_ram > 0) && (data & 0x0f == 0x0a),
             // lower 8 bits of rom bank
             0x2000..=0x2fff => {
                 self.rom_bank = (self.rom_bank & 0x100) | data as u16;
@@ -60,9 +62,11 @@ impl MemoryBankController for MBC5 {
             }
             // ram bank select
             0x4000..=0x5fff => {
-                self.ram_bank = data & 0x0f;
+                if self.max_ram > 0 {
+                    self.ram_bank = (data & 0x0f) % self.max_ram;
+                }
             }
-            // read extern ram banks
+            // write extern ram banks
             0xa000..=0xbfff => {
                 if self.ram_enable {
                     let addr = addr - 0xa000 + self.ram_bank as u16 * 0x2000;

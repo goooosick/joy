@@ -66,6 +66,8 @@ pub fn load_cartridge<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Car
         0x01 => 0x800,
         0x02 => 0x2000,
         0x03 => 0x8000,
+        0x04 => 0x20000,
+        0x05 => 0x10000,
         _ => unreachable!(),
     };
     assert_eq!(rom_size, rom.len());

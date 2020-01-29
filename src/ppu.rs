@@ -214,8 +214,11 @@ impl Ppu {
                     let color_index = tile[tile_y][tile_x];
 
                     let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
-                    if on_screen && color_index != TileValue::B00 && !bg_above[screen_x as usize] {
-                        if sprite_above || (sprite.above_bg || bg_b00[screen_x as usize]) {
+                    if on_screen && color_index != TileValue::B00 {
+                        if sprite_above
+                            || (!bg_above[screen_x as usize] && sprite.above_bg)
+                            || bg_b00[screen_x as usize]
+                        {
                             let color = self.obj_palette.color(sprite.palette, color_index);
                             self.frame_buffer[(fb_offset + screen_x as usize * 3)..][0..3]
                                 .copy_from_slice(color);
@@ -253,6 +256,7 @@ impl Ppu {
                     self.mode = LcdMode::HBlank;
 
                     self.render_line();
+                    self.hdma_avaliable = true;
                     stat_interrupt = self.stat.contains(STAT::HBLANK_INTERRUPT);
                 }
             }
@@ -261,7 +265,6 @@ impl Ppu {
                     self.clocks -= 204;
 
                     self.ly += 1;
-                    self.hdma_avaliable = true;
                     self.check_lyc(interrupts);
 
                     if self.ly == 144 {
@@ -275,6 +278,8 @@ impl Ppu {
                         self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
                     }
+
+                    self.hdma_avaliable = false;
                 }
             }
             LcdMode::VBlank => {

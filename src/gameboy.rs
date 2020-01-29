@@ -203,22 +203,21 @@ impl GameBoy {
 
         let mut current = 0;
         let max_cycles = GB_CLOCK_SPEED / GB_DEVICE_FPS / 4;
-        let speed_multiplier = if self.mode == SpeedMode::Normal { 1 } else { 2 };
+        let speed_mod = if self.mode == SpeedMode::Normal { 1 } else { 2 };
 
         self.debug_output = true;
 
-        while current < max_cycles * speed_multiplier {
-            let cycles = self.step();
+        while current < max_cycles * speed_mod {
+            let cycles = self.step() * 4;
 
-            self.timer.update(cycles * 4, &mut self.interrupt_handler);
+            self.timer.update(cycles, &mut self.interrupt_handler);
             self.ppu
-                .update(cycles * 4 / speed_multiplier, &mut self.interrupt_handler);
-            self.apu
-                .update(cycles * 4 / speed_multiplier / AUDIO_FREQ_DIVIDER);
+                .update(cycles / speed_mod, &mut self.interrupt_handler);
+            self.apu.update(cycles / speed_mod / AUDIO_FREQ_DIVIDER);
 
             self.run_hdma();
 
-            current += cycles;
+            current += cycles / 4;
             self.joypad.update(&mut self.interrupt_handler);
         }
     }
@@ -227,12 +226,12 @@ impl GameBoy {
         if self.hdma_active && self.ppu.hdma_avaliable() {
             for i in 0x00..0x10 {
                 self.ppu
-                    .hdma_write(0x8000 + self.hdma_dst + i, self.read(self.hdma_src + i));
+                    .hdma_write(self.hdma_dst + i, self.read(self.hdma_src + i));
             }
             self.hdma_src += 0x10;
             self.hdma_dst += 0x10;
-
             self.hdma_len -= 1;
+
             if self.hdma_len == 0 {
                 self.hdma_active = false;
             }
@@ -285,12 +284,12 @@ impl GameBoy {
             0xff68..=0xff6b => self.ppu.read(addr),
 
             0xff4d if self.cgb => self.mode as u8 | (self.prepare_speed_switch as u8),
-            0xff51 if self.cgb => (self.hdma_src >> 8) as u8,
-            0xff52 if self.cgb => self.hdma_src as u8,
-            0xff53 if self.cgb => (self.hdma_dst >> 8) as u8,
-            0xff54 if self.cgb => self.hdma_dst as u8,
-            0xff55 if self.cgb => {
-                ((!self.hdma_active as u8) << 7) | (self.hdma_len.saturating_sub(1) as u8)
+            0xff51 => 0xff,
+            0xff52 => 0xff,
+            0xff53 => 0xff,
+            0xff54 => 0xff,
+            0xff55 => {
+                ((!self.hdma_active as u8) << 7) | (self.hdma_len.wrapping_sub(1) as u8 & 0x7f)
             }
 
             0xff70 if self.cgb => self.mem.wram_bank(),
@@ -323,7 +322,7 @@ impl GameBoy {
             0xff51 if self.cgb => self.hdma_src = (self.hdma_src & 0xff) | ((data as u16) << 8),
             0xff52 if self.cgb => self.hdma_src = (self.hdma_src & 0xff00) | ((data & 0xf0) as u16),
             0xff53 if self.cgb => {
-                self.hdma_dst = (self.hdma_dst & 0xff) | (((data & 0x1f) as u16) << 8)
+                self.hdma_dst = (self.hdma_dst & 0xff) | (((data & 0x1f) as u16) << 8) | 0x8000
             }
             0xff54 if self.cgb => self.hdma_dst = (self.hdma_dst & 0xff00) | ((data & 0xf0) as u16),
             0xff55 if self.cgb => self.hdma(data),
@@ -346,15 +345,18 @@ impl GameBoy {
         self.hdma_len = (data as u16 & 0x7f) + 1;
 
         if data & 0x80 == 0 && self.hdma_active {
+            self.hdma_len = 0x80 | data as u16;
             self.hdma_active = false;
         } else {
             // general hdma
             if data & 0x80 == 0 {
-                for i in 0x00..(self.hdma_len << 4) {
-                    self.ppu
-                        .hdma_write(0x8000 + self.hdma_dst + i, self.read(self.hdma_src + i));
+                self.hdma_len <<= 4;
+                while self.hdma_len > 0 {
+                    self.ppu.hdma_write(self.hdma_dst, self.read(self.hdma_src));
+                    self.hdma_src += 1;
+                    self.hdma_dst += 1;
+                    self.hdma_len -= 1;
                 }
-
                 self.hdma_active = false;
             } else {
                 self.hdma_active = true;
