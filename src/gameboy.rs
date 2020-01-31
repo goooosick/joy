@@ -152,14 +152,13 @@ impl GameBoy {
     }
 
     pub fn step(&mut self) -> u32 {
-        let cycles = self.cycles;
-
-        self.handle_interrupts();
         if self.interrupt_enable_delay {
             self.interrupt_enable_delay = false;
             self.interrupt_master_enable = true;
         }
-
+        
+        let cycles = self.cycles;
+        
         if !self.halt {
             let op = self.fetch_byte();
 
@@ -174,6 +173,7 @@ impl GameBoy {
         } else {
             self.cycles += 1;
         };
+        self.handle_interrupts();
 
         self.cycles - cycles
     }
@@ -204,8 +204,6 @@ impl GameBoy {
         let mut current = 0;
         let max_cycles = GB_CLOCK_SPEED / GB_DEVICE_FPS / 4;
         let speed_mod = if self.mode == SpeedMode::Normal { 1 } else { 2 };
-
-        self.debug_output = true;
 
         while current < max_cycles * speed_mod {
             let cycles = self.step() * 4;
