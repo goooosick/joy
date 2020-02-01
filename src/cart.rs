@@ -42,6 +42,10 @@ impl Cartridge {
     pub fn cgb(&self) -> bool {
         self.cgb
     }
+
+    pub fn save_game(&self) {
+        save_game(self.mbc.get_ram(), self.title.as_str());
+    }
 }
 
 pub fn load_cartridge<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Cartridge> {
@@ -99,12 +103,6 @@ pub fn load_cartridge<P: AsRef<std::path::Path>>(path: P) -> std::io::Result<Car
     })
 }
 
-impl Drop for Cartridge {
-    fn drop(&mut self) {
-        save_game(self.mbc.get_ram(), self.title.as_str());
-    }
-}
-
 fn load_save(ram: Option<&mut [u8]>, title: &str) {
     if let Some(ram) = ram {
         if ram.len() > 0 {
@@ -129,8 +127,12 @@ fn save_game(ram: Option<&[u8]>, title: &str) {
                 .open(name.as_str())
             {
                 if let Err(_) = file.write_all(ram) {
-                    println!("save game failed: {}", name);
+                    eprintln!("save game failed: {}", name);
+                } else {
+                    println!("saved: {}", name);
                 }
+            } else {
+                eprintln!("open save file failed: {}", name);
             }
         }
     }

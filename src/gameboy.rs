@@ -40,7 +40,6 @@ pub struct GameBoy {
     prepare_speed_switch: bool,
 
     cycles: u32,
-    debug_output: bool,
 }
 
 impl GameBoy {
@@ -71,18 +70,12 @@ impl GameBoy {
             cgb,
             mode: SpeedMode::Normal,
             prepare_speed_switch: false,
-
-            debug_output: false,
         };
 
         gameboy.reset();
         gameboy.reg.pc = gameboy.cart.entry_point();
 
         gameboy
-    }
-
-    pub fn set_debug(&mut self, b: bool) {
-        self.debug_output = b;
     }
 
     // Resets gameboy to the states after bootrom.
@@ -137,18 +130,16 @@ impl GameBoy {
     }
 
     pub fn debug_output(&self) {
-        if self.debug_output {
-            let op = self.read(self.reg.pc);
-            print!("{:?} (cy: {})", self.reg, self.cycles);
+        let op = self.read(self.reg.pc);
+        print!("{:?} (cy: {})", self.reg, self.cycles);
 
-            let (op, desc) = if op != 0xcb {
-                (op, ops::OP_TABLE[op as usize].2)
-            } else {
-                let op = self.read(self.reg.pc + 1);
-                (op, ops::OP_CB_TABLE[op as usize].2)
-            };
-            println!(" [{:02x}] {}", op, desc);
-        }
+        let (op, desc) = if op != 0xcb {
+            (op, ops::OP_TABLE[op as usize].2)
+        } else {
+            let op = self.read(self.reg.pc + 1);
+            (op, ops::OP_CB_TABLE[op as usize].2)
+        };
+        println!(" [{:02x}] {}", op, desc);
     }
 
     pub fn step(&mut self) -> u32 {
@@ -156,9 +147,9 @@ impl GameBoy {
             self.interrupt_enable_delay = false;
             self.interrupt_master_enable = true;
         }
-        
+
         let cycles = self.cycles;
-        
+
         if !self.halt {
             let op = self.fetch_byte();
 
@@ -245,6 +236,10 @@ impl GameBoy {
     // or the memory usage will keep growing.
     pub fn consume_audio_buffer(&mut self) -> &mut Vec<u8> {
         self.apu.consume_audio_buffer()
+    }
+
+    pub fn save_game(&self) {
+        self.cart.save_game();
     }
 }
 

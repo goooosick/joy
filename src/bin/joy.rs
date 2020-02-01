@@ -30,7 +30,7 @@ fn main() -> Result<(), String> {
     let cart = load_cartridge(args.file).expect("load cartridge failed");
     let title = cart.title();
 
-    let mut cpu = GameBoy::new(cart);
+    let mut gameboy = GameBoy::new(cart);
 
     let sdl_context = sdl2::init()?;
 
@@ -106,6 +106,10 @@ fn main() -> Result<(), String> {
                         keycode: Some(Keycode::LShift),
                         ..
                     } => paused = !paused,
+                    Event::KeyDown {
+                        keycode: Some(Keycode::S),
+                        ..
+                    } => gameboy.save_game(),
                     _ => {}
                 }
             }
@@ -115,7 +119,7 @@ fn main() -> Result<(), String> {
             // emulate
             {
                 let keyboard = event_pump.keyboard_state();
-                cpu.emulate(JoypadState {
+                gameboy.emulate(JoypadState {
                     left: keyboard.is_scancode_pressed(Scancode::Left),
                     right: keyboard.is_scancode_pressed(Scancode::Right),
                     up: keyboard.is_scancode_pressed(Scancode::Up),
@@ -129,7 +133,7 @@ fn main() -> Result<(), String> {
 
             // audio
             {
-                let buffer = cpu.consume_audio_buffer();
+                let buffer = gameboy.consume_audio_buffer();
 
                 let samples = std::mem::replace(buffer, Vec::new());
                 std::mem::replace(buffer, audio_cvt.convert(samples));
@@ -141,7 +145,7 @@ fn main() -> Result<(), String> {
             // graphics
             {
                 texture.with_lock(None, |buffer: &mut [u8], _: usize| {
-                    buffer.copy_from_slice(cpu.get_frame_buffer());
+                    buffer.copy_from_slice(gameboy.get_frame_buffer());
                 })?;
                 canvas.copy(&texture, None, None)?;
                 canvas.present();
