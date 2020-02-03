@@ -138,7 +138,7 @@ fn save_game(ram: Option<&[u8]>, title: &str) {
     }
 }
 
-pub trait MemoryBankController {
+pub trait MemoryBankController: Send {
     fn read(&self, rom: &[u8], addr: u16) -> u8;
     fn write(&mut self, addr: u16, data: u8);
     fn mbc_type(&self) -> &'static str;
