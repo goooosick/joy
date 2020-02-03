@@ -11,8 +11,8 @@ mod reg;
 #[derive(Copy, Clone, Eq, PartialEq)]
 #[repr(u8)]
 enum SpeedMode {
-    Normal = 0x00,
-    Double = 0x80,
+    Normal = 0b00,
+    Double = 0b01,
 }
 
 pub struct GameBoy {
@@ -166,7 +166,15 @@ impl GameBoy {
         };
         self.handle_interrupts();
 
-        self.cycles - cycles
+        let cycles = (self.cycles - cycles) * 4;
+        let device_cycles = cycles >> (self.mode as u8);
+
+        self.timer.update(cycles, &mut self.interrupt_handler);
+        self.ppu.update(device_cycles, &mut self.interrupt_handler);
+        self.apu.update(device_cycles / AUDIO_FREQ_DIVIDER);
+        self.run_hdma();
+
+        device_cycles
     }
 
     fn handle_interrupts(&mut self) {
@@ -193,20 +201,11 @@ impl GameBoy {
         self.joypad.set_input(input);
 
         let mut current = 0;
-        let max_cycles = GB_CLOCK_SPEED / GB_DEVICE_FPS / 4;
-        let speed_mod = if self.mode == SpeedMode::Normal { 1 } else { 2 };
+        let max_cycles = GB_CLOCK_SPEED / GB_DEVICE_FPS;
 
-        while current < max_cycles * speed_mod {
-            let cycles = self.step() * 4;
+        while current < max_cycles {
+            current += self.step();
 
-            self.timer.update(cycles, &mut self.interrupt_handler);
-            self.ppu
-                .update(cycles / speed_mod, &mut self.interrupt_handler);
-            self.apu.update(cycles / speed_mod / AUDIO_FREQ_DIVIDER);
-
-            self.run_hdma();
-
-            current += cycles / 4;
             self.joypad.update(&mut self.interrupt_handler);
         }
     }
@@ -276,7 +275,7 @@ impl GameBoy {
             0xff4f => self.ppu.read(addr),
             0xff68..=0xff6b => self.ppu.read(addr),
 
-            0xff4d if self.cgb => self.mode as u8 | (self.prepare_speed_switch as u8),
+            0xff4d if self.cgb => ((self.mode as u8) << 7) | (self.prepare_speed_switch as u8),
             0xff51 => 0xff,
             0xff52 => 0xff,
             0xff53 => 0xff,
