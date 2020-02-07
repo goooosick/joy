@@ -83,11 +83,11 @@ impl Ppu {
 
     // since the default attrs map is valid for dmg, the
     // rendering of dmg and cgb is unified.
-    fn render_line(&mut self, render_bg: bool, count: usize) {
+    fn render_line(&mut self, count: usize) {
         let pattern_offset = (!self.lcdc.contains(LCDC::BG_TILE_TABLE)) as usize;
         let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
 
-        if render_bg {
+        if count > 0 {
             if self.cgb || self.lcdc.contains(LCDC::BG_ON) {
                 // PRE:
                 //     tilemap: 256 x 256 pixels, 32 x 32 tiles, 32 x 32 bytes
@@ -134,6 +134,8 @@ impl Ppu {
                     self.bg_b00[x] = color_index == TileValue::B00;
                 }
             }
+
+            self.current_x += count;
         } else {
             if self.lcdc.contains(LCDC::WINDOW_ON) && self.ly >= self.winy {
                 let tilemap_offset = 0x400 * (self.lcdc.contains(LCDC::WINDOW_MAP) as usize);
@@ -268,14 +270,18 @@ impl Ppu {
             }
             LcdMode::Transfer => {
                 if self.current_x < GB_LCD_WIDTH {
-                    self.render_line(true, clocks as usize);
-                    self.current_x += clocks as usize;
+                    self.render_line(clocks as usize);
                 }
+
                 if self.clocks >= 172 {
+                    if self.current_x < GB_LCD_WIDTH {
+                        self.render_line(GB_LCD_WIDTH - self.current_x);
+                    }
+                    self.render_line(0);
+
                     self.clocks -= 172;
                     self.mode = LcdMode::HBlank;
 
-                    self.render_line(false, 0);
                     self.hdma_avaliable = true;
                     stat_interrupt = self.stat.contains(STAT::HBLANK_INTERRUPT);
                 }
