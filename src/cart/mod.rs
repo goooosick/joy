@@ -108,8 +108,8 @@ fn load_save(ram: Option<&mut [u8]>, title: &str) {
         if ram.len() > 0 {
             let name = title.to_lowercase() + ".sav";
             if let Ok(mut file) = OpenOptions::new().read(true).open(name.as_str()) {
-                if let Err(_) = file.read_exact(ram) {
-                    println!("load save failed: {}", name);
+                if let Err(_) = file.read(ram) {
+                    println!("load save failed: {:?}", name);
                 }
             }
         }

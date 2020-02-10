@@ -88,11 +88,10 @@ fn main() -> Result<(), String> {
     audio_device.resume();
 
     let mut paused = false;
-
+    let start = Instant::now();
+    
     // main loop
     'running: loop {
-        let current = Instant::now();
-
         // events
         {
             for event in event_pump.poll_iter() {
@@ -152,10 +151,13 @@ fn main() -> Result<(), String> {
             }
         }
 
-        if let Some(time) = duration.checked_sub(current.elapsed()) {
-            thread::sleep(time);
-        } else {
-            eprintln!("frame takes too long!!!");
+        // time management
+        {
+            let duration = duration.as_nanos();
+            let sub_time = start.elapsed().as_nanos() % duration;
+
+            // if the emulation under-runs, this actually adds more lag
+            thread::sleep(Duration::from_nanos((duration - sub_time) as u64));
         }
     }
 
