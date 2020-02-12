@@ -89,7 +89,7 @@ fn main() -> Result<(), String> {
 
     let mut paused = false;
     let start = Instant::now();
-    
+
     // main loop
     'running: loop {
         // events

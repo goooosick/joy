@@ -351,7 +351,10 @@ impl Ppu {
             0xff41 => self.stat.bits() | (self.mode as u8),
             0xff42 => self.scy,
             0xff43 => self.scx,
-            0xff44 => self.ly,
+            // NOTE: early reporting line 0 when in line 153 (maybe not the whole line, but this works)
+            // Some games will start working when ly hits 0, if ly-0 delays scene will corrupt,
+            // e.g. Aladdin and TombRadier (gbc)
+            0xff44 => self.ly % 153,
             0xff45 => self.lyc,
             0xff47 => self.bg_palette.read_dmg(0),
             0xff48 => self.obj_palette.read_dmg(0),
