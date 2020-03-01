@@ -1,14 +1,15 @@
 use joy::*;
 
 use sdl2::audio::AudioCVT;
-use sdl2::audio::AudioFormat;
-use sdl2::audio::AudioSpecDesired;
+use sdl2::audio::{AudioCallback, AudioSpecDesired};
+use sdl2::audio::{AudioFormat, AudioFormatNum};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::keyboard::Scancode;
 use sdl2::pixels::PixelFormatEnum;
 use structopt::StructOpt;
 
+use std::collections::VecDeque;
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -64,7 +65,9 @@ fn main() -> Result<(), String> {
         channels: Some(2),
         samples: None,
     };
-    let audio_device = audio_system.open_queue::<u8, _>(None, &audio_spec)?;
+    let mut audio_device = audio_system.open_playback(None, &audio_spec, |_| AudioOutput {
+        samples: VecDeque::new(),
+    })?;
     {
         let spec = audio_device.spec();
         println!("audio spec: ");
@@ -137,7 +140,9 @@ fn main() -> Result<(), String> {
                 let samples = std::mem::replace(buffer, Vec::new());
                 std::mem::replace(buffer, audio_cvt.convert(samples));
 
-                audio_device.queue(buffer.as_slice());
+                let mut output = audio_device.lock();
+                buffer.iter().for_each(|x| output.samples.push_back(*x));
+
                 buffer.clear();
             }
 
@@ -162,4 +167,27 @@ fn main() -> Result<(), String> {
     }
 
     Ok(())
+}
+
+struct AudioOutput {
+    samples: VecDeque<u8>,
+}
+
+impl AudioCallback for AudioOutput {
+    type Channel = u8;
+
+    fn callback(&mut self, out: &mut [u8]) {
+        let len = out.len().min(self.samples.len());
+
+        &mut out[..len]
+            .iter_mut()
+            .for_each(|x| *x = self.samples.pop_front().unwrap());
+
+        if len < out.len() {
+            // underrun
+            &mut out[len..]
+                .iter_mut()
+                .for_each(|x| *x = Self::Channel::SILENCE);
+        }
+    }
 }
