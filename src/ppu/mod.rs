@@ -144,14 +144,10 @@ impl Ppu {
                 let tilemap_y = (self.ly - self.winy) as usize;
                 let tilemap_offset = tilemap_offset + (tilemap_y / 8) * 32;
                 let tile_y = tilemap_y & 0x07;
-
                 let win_x = self.winx.saturating_sub(7) as usize;
-                // for winx < 7 (I'm not sure about this, but it fixes some game)
-                let winx_offset = (7 - (self.winx as isize)).max(0) as usize;
 
                 // draw from win_x - the left edge of window, but tilemap starts from 0
                 for (tilemap_x, x) in (win_x..GB_LCD_WIDTH).enumerate() {
-                    let tilemap_x = tilemap_x + winx_offset;
                     let tilemap_index = tilemap_offset + tilemap_x / 8;
                     let attr = self.vram.attrmap(tilemap_index);
 
@@ -274,9 +270,9 @@ impl Ppu {
                 }
 
                 if self.clocks >= 172 {
-                    if self.current_x < GB_LCD_WIDTH {
-                        self.render_line(GB_LCD_WIDTH - self.current_x);
-                    }
+                    // if self.current_x < GB_LCD_WIDTH {
+                    // self.render_line(GB_LCD_WIDTH - self.current_x);
+                    // }
                     self.render_line(0);
 
                     self.clocks -= 172;

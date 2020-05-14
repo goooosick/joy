@@ -10,8 +10,6 @@ use sdl2::pixels::PixelFormatEnum;
 use structopt::StructOpt;
 
 use std::collections::VecDeque;
-use std::thread;
-use std::time::{Duration, Instant};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "Joy", about = "A gameboy emulator.")]
@@ -48,7 +46,11 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    let mut canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
+    let mut canvas = window
+        .into_canvas()
+        .present_vsync()
+        .build()
+        .map_err(|e| e.to_string())?;
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture_streaming(
@@ -84,14 +86,10 @@ fn main() -> Result<(), String> {
         2,
         audio_device.spec().freq,
     )?;
-
-    let duration = Duration::new(0, 1_000_000_000u32 / 60);
-    let mut event_pump = sdl_context.event_pump()?;
-
     audio_device.resume();
 
+    let mut event_pump = sdl_context.event_pump()?;
     let mut paused = false;
-    let start = Instant::now();
 
     // main loop
     'running: loop {
@@ -140,8 +138,7 @@ fn main() -> Result<(), String> {
                 let samples = std::mem::replace(buffer, Vec::new());
                 std::mem::replace(buffer, audio_cvt.convert(samples));
 
-                let mut output = audio_device.lock();
-                buffer.iter().for_each(|x| output.samples.push_back(*x));
+                audio_device.lock().samples.extend(buffer.iter());
 
                 buffer.clear();
             }
@@ -154,15 +151,6 @@ fn main() -> Result<(), String> {
                 canvas.copy(&texture, None, None)?;
                 canvas.present();
             }
-        }
-
-        // time management
-        {
-            let duration = duration.as_nanos();
-            let sub_time = start.elapsed().as_nanos() % duration;
-
-            // if the emulation under-runs, this actually adds more lag
-            thread::sleep(Duration::from_nanos((duration - sub_time) as u64));
         }
     }
 
@@ -179,15 +167,9 @@ impl AudioCallback for AudioOutput {
     fn callback(&mut self, out: &mut [u8]) {
         let len = out.len().min(self.samples.len());
 
-        &mut out[..len]
+        &mut out[..len].copy_from_slice(&self.samples.drain(..len).collect::<Vec<_>>());
+        &mut out[len..]
             .iter_mut()
-            .for_each(|x| *x = self.samples.pop_front().unwrap());
-
-        if len < out.len() {
-            // underrun
-            &mut out[len..]
-                .iter_mut()
-                .for_each(|x| *x = Self::Channel::SILENCE);
-        }
+            .for_each(|x| *x = Self::Channel::SILENCE);
     }
 }
