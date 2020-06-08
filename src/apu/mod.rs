@@ -4,23 +4,21 @@ mod parts;
 
 mod mixer;
 mod noise;
-mod square1;
-mod square2;
+mod square;
 mod wave;
 
 pub use self::mixer::Mixer;
 pub use self::noise::Noise;
 pub use self::parts::*;
-pub use self::square1::Square1;
-pub use self::square2::Square2;
+pub use self::square::Square;
 pub use self::wave::Wave;
 
 pub struct Apu {
     audio_buffer: Vec<u8>,
 
     frameseq: FrameSequencer,
-    square1: Square1,
-    square2: Square2,
+    square1: Square,
+    square2: Square,
     noise: Noise,
     wave: Wave,
     mixer: Mixer,
@@ -35,8 +33,8 @@ impl Apu {
             audio_buffer: Vec::new(),
 
             frameseq: FrameSequencer::new(),
-            square1: Square1::new(),
-            square2: Square2::new(),
+            square1: Square::new(),
+            square2: Square::new(),
             noise: Noise::new(),
             wave: Wave::new(),
             mixer: Mixer::new(),

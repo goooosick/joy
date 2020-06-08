@@ -1,29 +1,32 @@
-// Square 2
-//      FF15 ---- ---- Not used
-// NR21 FF16 DDLL LLLL	Duty, Length load (64-L)
-// NR22 FF17 VVVV APPP	Starting volume, Envelope add mode, period
-// NR23 FF18 FFFF FFFF	Frequency LSB
-// NR24 FF19 TL-- -FFF	Trigger, Length enable, Frequency MSB
+// Square Channel
+// NR10 FF10 -PPP NSSS	Sweep period, negate, shift
+// NR11 FF11 DDLL LLLL	Duty, Length load (64-L)
+// NR12 FF12 VVVV APPP	Starting volume, Envelope add mode, period
+// NR13 FF13 FFFF FFFF	Frequency LSB
+// NR14 FF14 TL-- -FFF	Trigger, Length enable, Frequency MSB
 
+// Square 1: Sweep -> Timer -> Duty -> Length Counter -> Envelope -> Mixer
 // Square 2:          Timer -> Duty -> Length Counter -> Envelope -> Mixer
 
 use super::*;
 
-pub struct Square2 {
+pub struct Square {
     duty: Duty,
     counter: LengthCounter,
     envelope: Envelope,
+    sweep: Sweep,
 
     mode: ChannelMode,
     dac: DacMode,
 }
 
-impl Square2 {
+impl Square {
     pub fn new() -> Self {
-        Square2 {
+        Square {
             duty: Duty::new(),
             counter: LengthCounter::new(64),
             envelope: Envelope::new(),
+            sweep: Sweep::new(),
 
             mode: ChannelMode::Off,
             dac: DacMode::Off,
@@ -40,7 +43,11 @@ impl Square2 {
         output
     }
 
-    pub fn set_x0(&mut self, _: u8) {}
+    pub fn set_x0(&mut self, data: u8) {
+        self.sweep.period = (data & 0b0111_0000) >> 4;
+        self.sweep.negate = (data & 0b1000) != 0;
+        self.sweep.shift = data & 0b0111;
+    }
 
     pub fn set_x1(&mut self, data: u8) {
         self.duty.set_duty((data & DUTY_MASK) >> 6);
@@ -77,9 +84,19 @@ impl Square2 {
             self.envelope.reset();
             self.counter.reset();
 
+            if !self.sweep.trigger(self.duty.get_freq()) {
+                self.mode = ChannelMode::Off;
+            }
+
             if !self.is_dac_on() {
                 self.mode = ChannelMode::Off;
             }
+        }
+    }
+
+    pub fn tick_sweep(&mut self) {
+        if !self.sweep.next(&mut self.duty) {
+            self.mode = ChannelMode::Off;
         }
     }
 
