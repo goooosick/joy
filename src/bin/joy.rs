@@ -10,6 +10,7 @@ use sdl2::pixels::PixelFormatEnum;
 use structopt::StructOpt;
 
 use std::collections::VecDeque;
+use std::time::{Duration, Instant};
 
 #[derive(Debug, StructOpt)]
 #[structopt(name = "Joy", about = "A gameboy emulator.")]
@@ -46,11 +47,7 @@ fn main() -> Result<(), String> {
         .build()
         .map_err(|e| e.to_string())?;
 
-    let mut canvas = window
-        .into_canvas()
-        .present_vsync()
-        .build()
-        .map_err(|e| e.to_string())?;
+    let mut canvas = window.into_canvas().build().map_err(|e| e.to_string())?;
     let texture_creator = canvas.texture_creator();
     let mut texture = texture_creator
         .create_texture_streaming(
@@ -91,8 +88,14 @@ fn main() -> Result<(), String> {
     let mut event_pump = sdl_context.event_pump()?;
     let mut paused = false;
 
+    const INTERVAL: Duration = Duration::from_nanos(16666667);
+    let mut time = Instant::now();
+
     // main loop
     'running: loop {
+        let cycles = (time.elapsed().as_secs_f32() * GB_CLOCK_SPEED as f32) as u32;
+        time = Instant::now();
+
         // events
         {
             for event in event_pump.poll_iter() {
@@ -119,16 +122,19 @@ fn main() -> Result<(), String> {
             // emulate
             {
                 let keyboard = event_pump.keyboard_state();
-                gameboy.emulate(JoypadState {
-                    left: keyboard.is_scancode_pressed(Scancode::Left),
-                    right: keyboard.is_scancode_pressed(Scancode::Right),
-                    up: keyboard.is_scancode_pressed(Scancode::Up),
-                    down: keyboard.is_scancode_pressed(Scancode::Down),
-                    start: keyboard.is_scancode_pressed(Scancode::C),
-                    select: keyboard.is_scancode_pressed(Scancode::V),
-                    button_a: keyboard.is_scancode_pressed(Scancode::Z),
-                    button_b: keyboard.is_scancode_pressed(Scancode::X),
-                });
+                gameboy.emulate(
+                    cycles,
+                    JoypadState {
+                        left: keyboard.is_scancode_pressed(Scancode::Left),
+                        right: keyboard.is_scancode_pressed(Scancode::Right),
+                        up: keyboard.is_scancode_pressed(Scancode::Up),
+                        down: keyboard.is_scancode_pressed(Scancode::Down),
+                        start: keyboard.is_scancode_pressed(Scancode::C),
+                        select: keyboard.is_scancode_pressed(Scancode::V),
+                        button_a: keyboard.is_scancode_pressed(Scancode::Z),
+                        button_b: keyboard.is_scancode_pressed(Scancode::X),
+                    },
+                );
             }
 
             // audio
@@ -136,7 +142,7 @@ fn main() -> Result<(), String> {
                 let buffer = gameboy.consume_audio_buffer();
 
                 let samples = std::mem::replace(buffer, Vec::new());
-                std::mem::replace(buffer, audio_cvt.convert(samples));
+                *buffer = audio_cvt.convert(samples);
 
                 audio_device.lock().samples.extend(buffer.iter());
 
@@ -152,6 +158,8 @@ fn main() -> Result<(), String> {
                 canvas.present();
             }
         }
+
+        std::thread::sleep(INTERVAL.checked_sub(time.elapsed()).unwrap_or_default());
     }
 
     Ok(())
@@ -167,8 +175,8 @@ impl AudioCallback for AudioOutput {
     fn callback(&mut self, out: &mut [u8]) {
         let len = out.len().min(self.samples.len());
 
-        &mut out[..len].copy_from_slice(&self.samples.drain(..len).collect::<Vec<_>>());
-        &mut out[len..]
+        out[..len].copy_from_slice(&self.samples.drain(..len).collect::<Vec<_>>());
+        out[len..]
             .iter_mut()
             .for_each(|x| *x = Self::Channel::SILENCE);
     }

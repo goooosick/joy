@@ -1,8 +1,8 @@
 pub use self::reg::*;
+use crate::AUDIO_FREQ_DIVIDER;
 use crate::{mem::Memory, Apu, Cartridge, Ppu};
 use crate::{InterruptHandler, Timer};
 use crate::{Joypad, JoypadState};
-use crate::{AUDIO_FREQ_DIVIDER, GB_CLOCK_SPEED, GB_DEVICE_FPS};
 
 mod ins;
 mod ops;
@@ -197,12 +197,10 @@ impl GameBoy {
         }
     }
 
-    pub fn emulate(&mut self, input: JoypadState) {
+    pub fn emulate(&mut self, max_cycles: u32, input: JoypadState) {
         self.joypad.set_input(input);
 
         let mut current = 0;
-        let max_cycles = GB_CLOCK_SPEED / GB_DEVICE_FPS;
-
         while current < max_cycles {
             current += self.step();
 
