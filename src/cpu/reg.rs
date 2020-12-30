@@ -12,10 +12,8 @@ pub struct Reg {
     pub l: u8,
     pub a: u8,
     _f: u8,
-    _sp_h: u8,
-    _sp_l: u8,
-    _pc_h: u8,
-    _pc_l: u8,
+    _sp: u16,
+    _pc: u16,
     pub f: Flag,
 }
 
@@ -31,10 +29,8 @@ pub struct Reg {
     pub h: u8,
     _f: u8,
     pub a: u8,
-    _sp_l: u8,
-    _sp_h: u8,
-    _pc_l: u8,
-    _pc_h: u8,
+    _sp: u16,
+    _pc: u16,
     pub f: Flag,
 }
 
@@ -47,7 +43,7 @@ pub struct WordReg {
     _af: u16,
     pub sp: u16,
     pub pc: u16,
-    _padding_flag: u32,
+    _f: Flag,
 }
 
 impl Deref for Reg {
@@ -70,10 +66,6 @@ const MASK_H: u8 = 0b0010_0000;
 const MASK_C: u8 = 0b0001_0000;
 
 impl Reg {
-    pub fn clear_flag(&mut self) {
-        self.f = Default::default();
-    }
-
     pub fn set_af(&mut self, data: u16) {
         self.a = ((data & 0xff00) >> 8) as u8;
 
@@ -118,6 +110,10 @@ pub struct Flag {
 }
 
 impl Flag {
+    pub fn clear(&mut self) {
+        *self = Default::default();
+    }
+
     pub fn to_u8(&self) -> u8 {
         ((self.zero as u8) << 7)
             | ((self.substract as u8) << 6)

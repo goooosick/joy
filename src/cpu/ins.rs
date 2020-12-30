@@ -1,104 +1,93 @@
-use super::GameBoy;
-use super::SpeedMode;
+use super::Cpu;
+use crate::bus::Bus;
 
-impl GameBoy {
-    pub fn dispatch_op(&mut self, op: u8) {
+impl Cpu {
+    pub fn dispatch_op(&mut self, op: u8, io: &mut Bus) {
         #[rustfmt::skip]
         match op {
-            0x00 => {},
-            0x01 => self.reg.bc = self.fetch_word(),
-            0x02 => self.write(self.reg.bc, self.reg.a),
-            0x03 => self.reg.bc= self.reg.bc.wrapping_add(1),
+            0x00 => {}
+            0x01 => self.reg.bc = self.fetch_word(io),
+            0x02 => self.write_byte(io, self.reg.bc, self.reg.a),
+            0x03 => { self.reg.bc = self.reg.bc.wrapping_add(1); io.step(); }
             0x04 => self.reg.b = self.inc(self.reg.b),
             0x05 => self.reg.b = self.dec(self.reg.b),
-            0x06 => self.reg.b = self.fetch_byte(),
-            0x07 => { self.reg.a = self.rlc(self.reg.a); self.reg.f.zero = false; },
-            0x08 => {let word = self.fetch_word(); self.write_word(word, self.reg.sp); },
-            0x09 => self.add_hl(self.reg.bc),
-            0x0a => self.reg.a = self.read(self.reg.bc),
-            0x0b => self.reg.bc= self.reg.bc.wrapping_sub(1),
+            0x06 => self.reg.b = self.fetch_byte(io),
+            0x07 => { self.reg.a = self.rlc(self.reg.a); self.reg.f.zero = false; }
+            0x08 => { let word = self.fetch_word(io); self.write_word(io, word, self.reg.sp); }
+            0x09 => { self.add_hl(self.reg.bc); io.step(); }
+            0x0a => self.reg.a = self.read_byte(io, self.reg.bc),
+            0x0b => { self.reg.bc = self.reg.bc.wrapping_sub(1); io.step(); }
             0x0c => self.reg.c = self.inc(self.reg.c),
             0x0d => self.reg.c = self.dec(self.reg.c),
-            0x0e => self.reg.c = self.fetch_byte(),
-            0x0f => { self.reg.a = self.rrc(self.reg.a); self.reg.f.zero = false; },
+            0x0e => self.reg.c = self.fetch_byte(io),
+            0x0f => { self.reg.a = self.rrc(self.reg.a); self.reg.f.zero = false; }
 
-            0x10 => {
-                // Note: `stop` instruction skips the next op 
-                let _ = self.fetch_byte();
-
-                if self.prepare_speed_switch {
-                    if self.mode == SpeedMode::Normal {
-                        self.mode = SpeedMode::Double;
-                    } else {
-                        self.mode = SpeedMode::Normal;
-                    }
-                    self.prepare_speed_switch = false;
-                }
-            },
-            0x11 => self.reg.de = self.fetch_word(),
-            0x12 => self.write(self.reg.de, self.reg.a),
-            0x13 => self.reg.de= self.reg.de.wrapping_add(1),
+            // Note: `stop` instruction skips the next op
+            0x10 => { self.reg.pc += 1; io.switch_mode(); }
+            0x11 => self.reg.de = self.fetch_word(io),
+            0x12 => self.write_byte(io, self.reg.de, self.reg.a),
+            0x13 => { self.reg.de = self.reg.de.wrapping_add(1); io.step(); }
             0x14 => self.reg.d = self.inc(self.reg.d),
             0x15 => self.reg.d = self.dec(self.reg.d),
-            0x16 => self.reg.d = self.fetch_byte(),
-            0x17 => { self.reg.a = self.rl(self.reg.a); self.reg.f.zero = false; },
-            0x18 => self.jump_relative(),
-            0x19 => self.add_hl(self.reg.de),
-            0x1a => self.reg.a = self.read(self.reg.de),
-            0x1b => self.reg.de= self.reg.de.wrapping_sub(1),
+            0x16 => self.reg.d = self.fetch_byte(io),
+            0x17 => { self.reg.a = self.rl(self.reg.a); self.reg.f.zero = false; }
+            0x18 => self.jump_relative(io),
+            0x19 => { self.add_hl(self.reg.de); io.step(); }
+            0x1a => self.reg.a = self.read_byte(io, self.reg.de),
+            0x1b => { self.reg.de = self.reg.de.wrapping_sub(1); io.step(); }
             0x1c => self.reg.e = self.inc(self.reg.e),
             0x1d => self.reg.e = self.dec(self.reg.e),
-            0x1e => self.reg.e = self.fetch_byte(),
-            0x1f => { self.reg.a = self.rr(self.reg.a); self.reg.f.zero = false; },
+            0x1e => self.reg.e = self.fetch_byte(io),
+            0x1f => { self.reg.a = self.rr(self.reg.a); self.reg.f.zero = false; }
 
-            0x20 => self.jump_relative_cond(!self.reg.f.zero),
-            0x21 => self.reg.hl = self.fetch_word(),
-            0x22 => { self.write(self.reg.hl, self.reg.a); self.reg.hl = self.reg.hl.wrapping_add(1); },
-            0x23 => self.reg.hl= self.reg.hl.wrapping_add(1),
+            0x20 => self.jump_relative_cond(io, !self.reg.f.zero),
+            0x21 => self.reg.hl = self.fetch_word(io),
+            0x22 => { self.write_byte(io, self.reg.hl, self.reg.a); self.reg.hl = self.reg.hl.wrapping_add(1); }
+            0x23 => { self.reg.hl = self.reg.hl.wrapping_add(1); io.step(); }
             0x24 => self.reg.h = self.inc(self.reg.h),
             0x25 => self.reg.h = self.dec(self.reg.h),
-            0x26 => self.reg.h = self.fetch_byte(),
+            0x26 => self.reg.h = self.fetch_byte(io),
             0x27 => self.daa(),
-            0x28 => self.jump_relative_cond(self.reg.f.zero),
-            0x29 => self.add_hl(self.reg.hl),
-            0x2a => { self.reg.a = self.read(self.reg.hl); self.reg.hl = self.reg.hl.wrapping_add(1); },
-            0x2b => self.reg.hl= self.reg.hl.wrapping_sub(1),
+            0x28 => self.jump_relative_cond(io, self.reg.f.zero),
+            0x29 => { self.add_hl(self.reg.hl); io.step(); }
+            0x2a => { self.reg.a = self.read_byte(io, self.reg.hl); self.reg.hl = self.reg.hl.wrapping_add(1); }
+            0x2b => { self.reg.hl = self.reg.hl.wrapping_sub(1); io.step(); }
             0x2c => self.reg.l = self.inc(self.reg.l),
             0x2d => self.reg.l = self.dec(self.reg.l),
-            0x2e => self.reg.l = self.fetch_byte(),
+            0x2e => self.reg.l = self.fetch_byte(io),
             0x2f => self.cpl(),
 
-            0x30 => self.jump_relative_cond(!self.reg.f.carry),
-            0x31 => self.reg.sp = self.fetch_word(),
-            0x32 => { self.write(self.reg.hl, self.reg.a); self.reg.hl = self.reg.hl.wrapping_sub(1); },
-            0x33 => self.reg.sp= self.reg.sp.wrapping_add(1),
+            0x30 => self.jump_relative_cond(io, !self.reg.f.carry),
+            0x31 => self.reg.sp = self.fetch_word(io),
+            0x32 => { self.write_byte(io, self.reg.hl, self.reg.a); self.reg.hl = self.reg.hl.wrapping_sub(1); }
+            0x33 => { self.reg.sp = self.reg.sp.wrapping_add(1); io.step(); }
             0x34 => {
-                let old = self.read(self.reg.hl);
+                let old = self.read_byte(io, self.reg.hl);
                 let new = old.wrapping_add(1);
-                self.write(self.reg.hl, new);
+                self.write_byte(io, self.reg.hl, new);
 
                 self.reg.f.zero = new == 0;
                 self.reg.f.substract = false;
                 self.reg.f.half_carry = (old & 0x0f) == 0x0f;
-            },
+            }
             0x35 => {
-                let old = self.read(self.reg.hl);
+                let old = self.read_byte(io, self.reg.hl);
                 let new = old.wrapping_sub(1);
-                self.write(self.reg.hl, new);
+                self.write_byte(io, self.reg.hl, new);
 
                 self.reg.f.zero = new == 0;
                 self.reg.f.substract = true;
                 self.reg.f.half_carry = (old & 0x0f) == 0x00;
-            },
-            0x36 => { let byte = self.fetch_byte(); self.write(self.reg.hl, byte); },
+            }
+            0x36 => { let byte = self.fetch_byte(io); self.write_byte(io, self.reg.hl, byte); }
             0x37 => self.scf(),
-            0x38 => self.jump_relative_cond(self.reg.f.carry),
-            0x39 => self.add_hl(self.reg.sp),
-            0x3a => { self.reg.a = self.read(self.reg.hl); self.reg.hl = self.reg.hl.wrapping_sub(1); },
-            0x3b => self.reg.sp= self.reg.sp.wrapping_sub(1),
+            0x38 => self.jump_relative_cond(io, self.reg.f.carry),
+            0x39 => { self.add_hl(self.reg.sp); io.step(); }
+            0x3a => { self.reg.a = self.read_byte(io, self.reg.hl); self.reg.hl = self.reg.hl.wrapping_sub(1); }
+            0x3b => { self.reg.sp = self.reg.sp.wrapping_sub(1); io.step(); }
             0x3c => self.reg.a = self.inc(self.reg.a),
             0x3d => self.reg.a = self.dec(self.reg.a),
-            0x3e => self.reg.a = self.fetch_byte(),
+            0x3e => self.reg.a = self.fetch_byte(io),
             0x3f => self.ccf(),
 
             0x40 => self.reg.b = self.reg.b,
@@ -107,7 +96,7 @@ impl GameBoy {
             0x43 => self.reg.b = self.reg.e,
             0x44 => self.reg.b = self.reg.h,
             0x45 => self.reg.b = self.reg.l,
-            0x46 => self.reg.b = self.read(self.reg.hl),
+            0x46 => self.reg.b = self.read_byte(io, self.reg.hl),
             0x47 => self.reg.b = self.reg.a,
             0x48 => self.reg.c = self.reg.b,
             0x49 => self.reg.c = self.reg.c,
@@ -115,7 +104,7 @@ impl GameBoy {
             0x4b => self.reg.c = self.reg.e,
             0x4c => self.reg.c = self.reg.h,
             0x4d => self.reg.c = self.reg.l,
-            0x4e => self.reg.c = self.read(self.reg.hl),
+            0x4e => self.reg.c = self.read_byte(io, self.reg.hl),
             0x4f => self.reg.c = self.reg.a,
 
             0x50 => self.reg.d = self.reg.b,
@@ -124,7 +113,7 @@ impl GameBoy {
             0x53 => self.reg.d = self.reg.e,
             0x54 => self.reg.d = self.reg.h,
             0x55 => self.reg.d = self.reg.l,
-            0x56 => self.reg.d = self.read(self.reg.hl),
+            0x56 => self.reg.d = self.read_byte(io, self.reg.hl),
             0x57 => self.reg.d = self.reg.a,
             0x58 => self.reg.e = self.reg.b,
             0x59 => self.reg.e = self.reg.c,
@@ -132,7 +121,7 @@ impl GameBoy {
             0x5b => self.reg.e = self.reg.e,
             0x5c => self.reg.e = self.reg.h,
             0x5d => self.reg.e = self.reg.l,
-            0x5e => self.reg.e = self.read(self.reg.hl),
+            0x5e => self.reg.e = self.read_byte(io, self.reg.hl),
             0x5f => self.reg.e = self.reg.a,
 
             0x60 => self.reg.h = self.reg.b,
@@ -141,7 +130,7 @@ impl GameBoy {
             0x63 => self.reg.h = self.reg.e,
             0x64 => self.reg.h = self.reg.h,
             0x65 => self.reg.h = self.reg.l,
-            0x66 => self.reg.h = self.read(self.reg.hl),
+            0x66 => self.reg.h = self.read_byte(io, self.reg.hl),
             0x67 => self.reg.h = self.reg.a,
             0x68 => self.reg.l = self.reg.b,
             0x69 => self.reg.l = self.reg.c,
@@ -149,24 +138,24 @@ impl GameBoy {
             0x6b => self.reg.l = self.reg.e,
             0x6c => self.reg.l = self.reg.h,
             0x6d => self.reg.l = self.reg.l,
-            0x6e => self.reg.l = self.read(self.reg.hl),
+            0x6e => self.reg.l = self.read_byte(io, self.reg.hl),
             0x6f => self.reg.l = self.reg.a,
 
-            0x70 => self.write(self.reg.hl, self.reg.b),
-            0x71 => self.write(self.reg.hl, self.reg.c),
-            0x72 => self.write(self.reg.hl, self.reg.d),
-            0x73 => self.write(self.reg.hl, self.reg.e),
-            0x74 => self.write(self.reg.hl, self.reg.h),
-            0x75 => self.write(self.reg.hl, self.reg.l),
+            0x70 => self.write_byte(io, self.reg.hl, self.reg.b),
+            0x71 => self.write_byte(io, self.reg.hl, self.reg.c),
+            0x72 => self.write_byte(io, self.reg.hl, self.reg.d),
+            0x73 => self.write_byte(io, self.reg.hl, self.reg.e),
+            0x74 => self.write_byte(io, self.reg.hl, self.reg.h),
+            0x75 => self.write_byte(io, self.reg.hl, self.reg.l),
             0x76 => self.halt = true,
-            0x77 => self.write(self.reg.hl, self.reg.a),
+            0x77 => self.write_byte(io, self.reg.hl, self.reg.a),
             0x78 => self.reg.a = self.reg.b,
             0x79 => self.reg.a = self.reg.c,
             0x7a => self.reg.a = self.reg.d,
             0x7b => self.reg.a = self.reg.e,
             0x7c => self.reg.a = self.reg.h,
             0x7d => self.reg.a = self.reg.l,
-            0x7e => self.reg.a = self.read(self.reg.hl),
+            0x7e => self.reg.a = self.read_byte(io, self.reg.hl),
             0x7f => self.reg.a = self.reg.a,
 
             0x80 => self.add(self.reg.b),
@@ -175,7 +164,7 @@ impl GameBoy {
             0x83 => self.add(self.reg.e),
             0x84 => self.add(self.reg.h),
             0x85 => self.add(self.reg.l),
-            0x86 => self.add(self.read(self.reg.hl)),
+            0x86 => self.add(self.read_byte(io, self.reg.hl)),
             0x87 => self.add(self.reg.a),
             0x88 => self.adc(self.reg.b),
             0x89 => self.adc(self.reg.c),
@@ -183,7 +172,7 @@ impl GameBoy {
             0x8b => self.adc(self.reg.e),
             0x8c => self.adc(self.reg.h),
             0x8d => self.adc(self.reg.l),
-            0x8e => self.adc(self.read(self.reg.hl)),
+            0x8e => self.adc(self.read_byte(io, self.reg.hl)),
             0x8f => self.adc(self.reg.a),
 
             0x90 => self.sub(self.reg.b),
@@ -192,7 +181,7 @@ impl GameBoy {
             0x93 => self.sub(self.reg.e),
             0x94 => self.sub(self.reg.h),
             0x95 => self.sub(self.reg.l),
-            0x96 => self.sub(self.read(self.reg.hl)),
+            0x96 => self.sub(self.read_byte(io, self.reg.hl)),
             0x97 => self.sub(self.reg.a),
             0x98 => self.sbc(self.reg.b),
             0x99 => self.sbc(self.reg.c),
@@ -200,7 +189,7 @@ impl GameBoy {
             0x9b => self.sbc(self.reg.e),
             0x9c => self.sbc(self.reg.h),
             0x9d => self.sbc(self.reg.l),
-            0x9e => self.sbc(self.read(self.reg.hl)),
+            0x9e => self.sbc(self.read_byte(io, self.reg.hl)),
             0x9f => self.sbc(self.reg.a),
 
             0xa0 => self.and(self.reg.b),
@@ -209,7 +198,7 @@ impl GameBoy {
             0xa3 => self.and(self.reg.e),
             0xa4 => self.and(self.reg.h),
             0xa5 => self.and(self.reg.l),
-            0xa6 => self.and(self.read(self.reg.hl)),
+            0xa6 => self.and(self.read_byte(io, self.reg.hl)),
             0xa7 => self.and(self.reg.a),
             0xa8 => self.xor(self.reg.b),
             0xa9 => self.xor(self.reg.c),
@@ -217,7 +206,7 @@ impl GameBoy {
             0xab => self.xor(self.reg.e),
             0xac => self.xor(self.reg.h),
             0xad => self.xor(self.reg.l),
-            0xae => self.xor(self.read(self.reg.hl)),
+            0xae => self.xor(self.read_byte(io, self.reg.hl)),
             0xaf => self.xor(self.reg.a),
 
             0xb0 => self.or(self.reg.b),
@@ -226,7 +215,7 @@ impl GameBoy {
             0xb3 => self.or(self.reg.e),
             0xb4 => self.or(self.reg.h),
             0xb5 => self.or(self.reg.l),
-            0xb6 => self.or(self.read(self.reg.hl)),
+            0xb6 => self.or(self.read_byte(io, self.reg.hl)),
             0xb7 => self.or(self.reg.a),
             0xb8 => self.cp(self.reg.b),
             0xb9 => self.cp(self.reg.c),
@@ -234,99 +223,92 @@ impl GameBoy {
             0xbb => self.cp(self.reg.e),
             0xbc => self.cp(self.reg.h),
             0xbd => self.cp(self.reg.l),
-            0xbe => self.cp(self.read(self.reg.hl)),
+            0xbe => self.cp(self.read_byte(io, self.reg.hl)),
             0xbf => self.cp(self.reg.a),
 
-            0xc0 => self.ret_cond(!self.reg.f.zero),
-            0xc1 => self.reg.bc = self.pop(),
-            0xc2 => self.jump_cond(!self.reg.f.zero),
-            0xc3 => self.reg.pc = self.fetch_word(),
-            0xc4 => self.call_cond(!self.reg.f.zero),
-            0xc5 => self.push(self.reg.bc),
-            0xc6 => { let byte = self.fetch_byte(); self.add(byte); },
-            0xc7 => self.call(0x00),
-            0xc8 => self.ret_cond(self.reg.f.zero),
-            0xc9 => self.ret(),
-            0xca => self.jump_cond(self.reg.f.zero),
+            0xc0 => self.ret_cond(io, !self.reg.f.zero),
+            0xc1 => self.reg.bc = self.pop(io),
+            0xc2 => self.jump_cond(io, !self.reg.f.zero),
+            0xc3 => { self.reg.pc = self.fetch_word(io); io.step(); }
+            0xc4 => self.call_cond(io, !self.reg.f.zero),
+            0xc5 => { io.step(); self.push(io, self.reg.bc); }
+            0xc6 => { let byte = self.fetch_byte(io); self.add(byte); }
+            0xc7 => self.rst(io, 0x00),
+            0xc8 => self.ret_cond(io, self.reg.f.zero),
+            0xc9 => { self.ret(io); }
+            0xca => self.jump_cond(io, self.reg.f.zero),
             0xcb => unreachable!(),
-            0xcc => self.call_cond(self.reg.f.zero),
-            0xcd => { let word = self.fetch_word(); self.call(word); },
-            0xce => { let byte = self.fetch_byte(); self.adc(byte); },
-            0xcf => self.call(0x08),
+            0xcc => self.call_cond(io, self.reg.f.zero),
+            0xcd => { let word = self.fetch_word(io); self.call(io, word); }
+            0xce => { let byte = self.fetch_byte(io); self.adc(byte); }
+            0xcf => self.rst(io, 0x08),
 
-            0xd0 => self.ret_cond(!self.reg.f.carry),
-            0xd1 => self.reg.de = self.pop(),
-            0xd2 => self.jump_cond(!self.reg.f.carry),
+            0xd0 => self.ret_cond(io, !self.reg.f.carry),
+            0xd1 => self.reg.de = self.pop(io),
+            0xd2 => self.jump_cond(io, !self.reg.f.carry),
             0xd3 => panic!("invalid op: {:02x}", op),
-            0xd4 => self.call_cond(!self.reg.f.carry),
-            0xd5 => self.push(self.reg.de),
-            0xd6 => { let byte = self.fetch_byte(); self.sub(byte); },
-            0xd7 => self.call(0x10),
-            0xd8 => self.ret_cond(self.reg.f.carry),
-            0xd9 => self.reti(),
-            0xda => self.jump_cond(self.reg.f.carry),
+            0xd4 => self.call_cond(io, !self.reg.f.carry),
+            0xd5 => { io.step(); self.push(io, self.reg.de); }
+            0xd6 => { let byte = self.fetch_byte(io); self.sub(byte); }
+            0xd7 => self.rst(io, 0x10),
+            0xd8 => self.ret_cond(io, self.reg.f.carry),
+            0xd9 => self.reti(io),
+            0xda => self.jump_cond(io, self.reg.f.carry),
             0xdb => panic!("invalid op: {:02x}", op),
-            0xdc => self.call_cond(self.reg.f.carry),
+            0xdc => self.call_cond(io, self.reg.f.carry),
             0xdd => panic!("invalid op: {:02x}", op),
-            0xde => { let byte = self.fetch_byte(); self.sbc(byte); },
-            0xdf => self.call(0x18),
+            0xde => { let byte = self.fetch_byte(io); self.sbc(byte); }
+            0xdf => self.rst(io, 0x18),
 
-            0xe0 => { let port = self.fetch_byte(); self.write_io(port, self.reg.a); },
-            0xe1 => self.reg.hl = self.pop(),
-            0xe2 => self.write_io(self.reg.c, self.reg.a),
+            0xe0 => { let port = self.fetch_byte(io); self.write_io(io, port, self.reg.a); }
+            0xe1 => self.reg.hl = self.pop(io),
+            0xe2 => self.write_io(io, self.reg.c, self.reg.a),
             0xe3 => panic!("invalid op: {:02x}", op),
             0xe4 => panic!("invalid op: {:02x}", op),
-            0xe5 => self.push(self.reg.hl),
-            0xe6 => { let byte = self.fetch_byte(); self.and(byte); },
-            0xe7 => self.call(0x20),
-            0xe8 => { let byte = self.fetch_byte(); self.add_sp(byte); },
+            0xe5 => { io.step(); self.push(io, self.reg.hl); }
+            0xe6 => { let byte = self.fetch_byte(io); self.and(byte); }
+            0xe7 => self.rst(io, 0x20),
+            0xe8 => { let byte = self.fetch_byte(io); io.step(); io.step(); self.add_sp(byte); }
             // Note: `JP (HL)` is actually `JP HL`
             0xe9 => self.reg.pc = self.reg.hl,
-            0xea => { let addr = self.fetch_word(); self.write(addr, self.reg.a); },
+            0xea => { let addr = self.fetch_word(io); self.write_byte(io, addr, self.reg.a); }
             0xeb => panic!("invalid op: {:02x}", op),
             0xec => panic!("invalid op: {:02x}", op),
             0xed => panic!("invalid op: {:02x}", op),
-            0xee => { let byte = self.fetch_byte(); self.xor(byte); },
-            0xef => self.call(0x28),
+            0xee => { let byte = self.fetch_byte(io); self.xor(byte); }
+            0xef => self.rst(io, 0x28),
 
-            0xf0 => { let port = self.fetch_byte(); self.reg.a = self.read_io(port); },
-            0xf1 => { let af = self.pop() & 0xfff0; self.reg.set_af(af); },
-            0xf2 => self.reg.a = self.read_io(self.reg.c),
+            0xf0 => { let port = self.fetch_byte(io); self.reg.a = self.read_io(io, port); }
+            0xf1 => { let af = self.pop(io) & 0xfff0; self.reg.set_af(af); }
+            0xf2 => self.reg.a = self.read_io(io, self.reg.c),
             0xf3 => self.interrupt_master_enable = false,
             0xf4 => panic!("invalid op: {:02x}", op),
-            0xf5 => self.push(self.reg.af()),
-            0xf6 => { let byte = self.fetch_byte(); self.or(byte); },
-            0xf7 => self.call(0x30),
-            0xf8 => {
-                let byte = self.fetch_byte();
-                let sp = self.reg.sp;
-                self.add_sp(byte);
-                self.reg.hl = self.reg.sp;
-                self.reg.sp = sp;
-            },
-            0xf9 => self.reg.sp = self.reg.hl,
-            0xfa => { let addr = self.fetch_word(); self.reg.a = self.read(addr); },
+            0xf5 => { io.step(); self.push(io, self.reg.af()); }
+            0xf6 => { let byte = self.fetch_byte(io); self.or(byte); }
+            0xf7 => self.rst(io, 0x30),
+            0xf8 => { let byte = self.fetch_byte(io); io.step(); let sp = self.reg.sp; self.add_sp(byte); self.reg.hl = self.reg.sp; self.reg.sp = sp; }
+            0xf9 => { self.reg.sp = self.reg.hl; io.step(); }
+            0xfa => { let addr = self.fetch_word(io); self.reg.a = self.read_byte(io, addr); }
             0xfb => self.interrupt_enable_delay = true,
             0xfc => panic!("invalid op: {:02x}", op),
             0xfd => panic!("invalid op: {:02x}", op),
-            0xfe => { let byte = self.fetch_byte(); self.cp(byte); },
-            0xff => self.call(0x38),
+            0xfe => { let byte = self.fetch_byte(io); self.cp(byte); }
+            0xff => self.rst(io, 0x38),
         };
     }
 
-    pub fn dispatch_op_cb(&mut self, op: u8) {
-        const FN_ONE: [for<'r> fn(&'r mut GameBoy, u8) -> u8; 8] = [
-            GameBoy::rlc,
-            GameBoy::rrc,
-            GameBoy::rl,
-            GameBoy::rr,
-            GameBoy::sla,
-            GameBoy::sra,
-            GameBoy::swap,
-            GameBoy::srl,
+    pub fn dispatch_op_cb(&mut self, op: u8, io: &mut Bus) {
+        const FN_ONE: [for<'r> fn(&'r mut Cpu, u8) -> u8; 8] = [
+            Cpu::rlc,
+            Cpu::rrc,
+            Cpu::rl,
+            Cpu::rr,
+            Cpu::sla,
+            Cpu::sra,
+            Cpu::swap,
+            Cpu::srl,
         ];
-        const FN_TWO: [for<'r> fn(&'r mut GameBoy, u8, u8) -> u8; 3] =
-            [GameBoy::bit, GameBoy::res, GameBoy::set];
+        const FN_TWO: [for<'r> fn(&'r mut Cpu, u8, u8) -> u8; 3] = [Cpu::bit, Cpu::res, Cpu::set];
 
         match op {
             0x00..=0x3f => {
@@ -340,8 +322,8 @@ impl GameBoy {
                     4 => self.reg.h = func(self, self.reg.h),
                     5 => self.reg.l = func(self, self.reg.l),
                     6 => {
-                        let value = func(self, self.read(self.reg.hl));
-                        self.write(self.reg.hl, value);
+                        let value = func(self, self.read_byte(io, self.reg.hl));
+                        self.write_byte(io, self.reg.hl, value);
                     }
                     7 => self.reg.a = func(self, self.reg.a),
                     _ => unreachable!(),
@@ -362,8 +344,10 @@ impl GameBoy {
                     4 => self.reg.h = func(self, n, self.reg.h),
                     5 => self.reg.l = func(self, n, self.reg.l),
                     6 => {
-                        let value = func(self, n, self.read(self.reg.hl));
-                        self.write(self.reg.hl, value);
+                        let value = func(self, n, self.read_byte(io, self.reg.hl));
+                        if index != 0 {
+                            self.write_byte(io, self.reg.hl, value);
+                        }
                     }
                     7 => self.reg.a = func(self, n, self.reg.a),
                     _ => unreachable!(),
@@ -373,56 +357,64 @@ impl GameBoy {
     }
 }
 
-impl GameBoy {
-    #[inline]
-    fn jump_relative(&mut self) {
-        let offset = self.fetch_byte();
+impl Cpu {
+    fn jump_relative(&mut self, io: &mut Bus) {
+        let offset = self.fetch_byte(io);
         self.reg.pc = add_relative(self.reg.pc, offset);
+        io.step();
     }
 
-    fn jump_relative_cond(&mut self, cond: bool) {
-        let offset = self.fetch_byte();
+    fn jump_relative_cond(&mut self, io: &mut Bus, cond: bool) {
+        let offset = self.fetch_byte(io);
         if cond {
+            io.step();
             self.reg.pc = add_relative(self.reg.pc, offset);
-            self.cycles += 1;
         }
     }
 
-    fn jump_cond(&mut self, cond: bool) {
-        let addr = self.fetch_word();
+    fn jump_cond(&mut self, io: &mut Bus, cond: bool) {
+        let addr = self.fetch_word(io);
         if cond {
+            io.step();
             self.reg.pc = addr;
-            self.cycles += 1;
         }
     }
 
-    fn ret(&mut self) {
-        self.reg.pc = self.pop();
+    fn ret(&mut self, io: &mut Bus) {
+        io.step();
+        self.reg.pc = self.pop(io);
     }
 
-    fn reti(&mut self) {
-        self.reg.pc = self.pop();
+    fn reti(&mut self, io: &mut Bus) {
+        self.reg.pc = self.pop(io);
         self.interrupt_master_enable = true;
+        io.step();
     }
 
-    fn ret_cond(&mut self, cond: bool) {
+    fn ret_cond(&mut self, io: &mut Bus, cond: bool) {
+        io.step();
         if cond {
-            self.ret();
-            self.cycles += 3;
+            self.ret(io);
         }
     }
 
-    fn call(&mut self, addr: u16) {
-        self.push(self.reg.pc);
+    fn call(&mut self, io: &mut Bus, addr: u16) {
+        io.step();
+        self.push(io, self.reg.pc);
         self.reg.pc = addr;
     }
 
-    fn call_cond(&mut self, cond: bool) {
-        let addr = self.fetch_word();
+    fn call_cond(&mut self, io: &mut Bus, cond: bool) {
+        let addr = self.fetch_word(io);
         if cond {
-            self.call(addr);
-            self.cycles += 3;
+            self.call(io, addr);
         }
+    }
+
+    fn rst(&mut self, io: &mut Bus, addr: u8) {
+        io.step();
+        self.push(io, self.reg.pc);
+        self.reg.pc = addr as u16;
     }
 
     fn add(&mut self, right: u8) {
@@ -477,7 +469,7 @@ impl GameBoy {
 
     fn and(&mut self, right: u8) {
         let new = self.reg.a & right;
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.half_carry = true;
         self.reg.f.zero = new == 0;
         self.reg.a = new;
@@ -485,14 +477,14 @@ impl GameBoy {
 
     fn xor(&mut self, right: u8) {
         let new = self.reg.a ^ right;
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.a = new;
     }
 
     fn or(&mut self, right: u8) {
         let new = self.reg.a | right;
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.a = new;
     }
@@ -527,7 +519,7 @@ impl GameBoy {
         let flag_c = (value & 0x80) >> 7;
         let new = (value << 1) | self.reg.f.carry as u8;
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.f.carry = flag_c == 1;
         new
@@ -537,7 +529,7 @@ impl GameBoy {
         let flag_c = value & 0x01;
         let new = (value >> 1) | (self.reg.f.carry as u8) << 7;
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.f.carry = flag_c == 1;
         new
@@ -547,7 +539,7 @@ impl GameBoy {
         let flag_c = (value & 0x80) >> 7;
         let new = (value << 1) | flag_c;
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.f.carry = flag_c == 1;
         new
@@ -557,7 +549,7 @@ impl GameBoy {
         let flag_c = value & 0x01;
         let new = (value >> 1) | (flag_c << 7);
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.f.carry = flag_c == 1;
         new
@@ -567,7 +559,7 @@ impl GameBoy {
         let flag_c = (value & 0x80) >> 7;
         let new = value << 1;
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.f.carry = flag_c == 1;
         new
@@ -577,7 +569,7 @@ impl GameBoy {
         let flag_c = value & 0x01;
         let new = (value & 0x80) | (value >> 1);
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.f.carry = flag_c == 1;
         new
@@ -587,7 +579,7 @@ impl GameBoy {
         let flag_c = value & 0x01;
         let new = value >> 1;
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         self.reg.f.carry = flag_c == 1;
         new
@@ -596,7 +588,7 @@ impl GameBoy {
     fn swap(&mut self, value: u8) -> u8 {
         let new = ((value & 0xf0) >> 4) | ((value & 0x0f) << 4);
 
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.zero = new == 0;
         new
     }
@@ -632,7 +624,7 @@ impl GameBoy {
         let new = add_relative(old, signed);
 
         self.reg.sp = new;
-        self.reg.clear_flag();
+        self.reg.f.clear();
         self.reg.f.half_carry = (new & 0x0f) < (old & 0x0f);
         self.reg.f.carry = (new & 0xff) < (old & 0xff);
     }

@@ -5,21 +5,23 @@
 #[doc(inline)]
 pub use self::{
     apu::Apu,
+    bus::Bus,
     cart::{load_cartridge, Cartridge},
-    gameboy::GameBoy,
+    cpu::Cpu,
+    gameboy::Gameboy,
     interrupt::InterruptHandler,
     joypad::{Joypad, JoypadState},
-    mem::Memory,
     ppu::Ppu,
     timer::Timer,
 };
 
 pub mod apu;
+pub mod bus;
 pub mod cart;
+pub mod cpu;
 pub mod gameboy;
 pub mod interrupt;
 pub mod joypad;
-pub mod mem;
 pub mod ppu;
 pub mod timer;
 

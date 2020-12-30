@@ -429,12 +429,9 @@ impl Ppu {
     }
 
     pub fn hdma_avaliable(&mut self) -> bool {
-        if self.hdma_avaliable {
-            self.hdma_avaliable = false;
-            true
-        } else {
-            false
-        }
+        let ret = self.hdma_avaliable;
+        self.hdma_avaliable = false;
+        ret
     }
 }
 

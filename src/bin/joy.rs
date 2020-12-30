@@ -30,7 +30,7 @@ fn main() -> Result<(), String> {
     let cart = load_cartridge(args.file).expect("load cartridge failed");
     let title = cart.title();
 
-    let mut gameboy = GameBoy::new(cart);
+    let mut gameboy = Gameboy::new(cart);
 
     let sdl_context = sdl2::init()?;
 

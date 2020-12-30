@@ -18,7 +18,6 @@ pub struct Timer {
     div_clocks: u16,
     timer_clocks: u16,
 
-    div: u8,
     tima: u8,
     tma: u8,
     tac: u8,
@@ -33,7 +32,6 @@ impl Timer {
             div_clocks: 0,
             timer_clocks: 0,
 
-            div: 0,
             tima: 0,
             tma: 0,
             tac: 0,
@@ -47,8 +45,6 @@ impl Timer {
         let clocks = clocks as u16;
 
         self.div_clocks = self.div_clocks.wrapping_add(clocks);
-        // div is just the high byte of internal clock
-        self.div = ((self.div_clocks & 0xff00) >> 8) as u8;
 
         if self.timer_enabled {
             self.timer_clocks += clocks;
@@ -67,7 +63,8 @@ impl Timer {
 
     pub fn read(&self, addr: u16) -> u8 {
         match addr {
-            DIV_PORT => self.div,
+            // div is just the high byte of internal clock
+            DIV_PORT => ((self.div_clocks & 0xff00) >> 8) as u8,
             TIMA_PORT => self.tima,
             TMA_PORT => self.tma,
             TAC_PORT => self.tac,
@@ -77,7 +74,10 @@ impl Timer {
 
     pub fn write(&mut self, addr: u16, data: u8) {
         match addr {
-            DIV_PORT => self.div_clocks = 0,
+            DIV_PORT => {
+                self.div_clocks = 0;
+                self.timer_clocks = 0;
+            }
             TIMA_PORT => self.tima = data,
             TMA_PORT => self.tma = data,
             TAC_PORT => {
