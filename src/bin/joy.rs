@@ -89,7 +89,7 @@ fn main() -> Result<(), String> {
     let mut paused = false;
 
     const INTERVAL: Duration = Duration::from_nanos(16666667);
-    let mut time = Instant::now();
+    let mut time = Instant::now() - INTERVAL;
 
     // main loop
     'running: loop {
