@@ -1,15 +1,12 @@
 use joy::*;
 
-use sdl2::audio::AudioCVT;
-use sdl2::audio::{AudioCallback, AudioSpecDesired};
-use sdl2::audio::{AudioFormat, AudioFormatNum};
+use sdl2::audio::{AudioQueue, AudioSpecDesired};
 use sdl2::event::Event;
 use sdl2::keyboard::Keycode;
 use sdl2::keyboard::Scancode;
 use sdl2::pixels::PixelFormatEnum;
 use structopt::StructOpt;
 
-use std::collections::VecDeque;
 use std::time::{Duration, Instant};
 
 #[derive(Debug, StructOpt)]
@@ -60,13 +57,11 @@ fn main() -> Result<(), String> {
     // audio
     let audio_system = sdl_context.audio()?;
     let audio_spec = AudioSpecDesired {
-        freq: None,
+        freq: Some(crate::AUDIO_FREQUENCY as i32),
         channels: Some(2),
         samples: None,
     };
-    let mut audio_device = audio_system.open_playback(None, &audio_spec, |_| AudioOutput {
-        samples: VecDeque::new(),
-    })?;
+    let audio_device: AudioQueue<i16> = audio_system.open_queue(None, &audio_spec)?;
     {
         let spec = audio_device.spec();
         println!("audio spec: ");
@@ -75,14 +70,6 @@ fn main() -> Result<(), String> {
         println!("    frequency: {}", spec.freq);
         println!("    buffer size: {} * {}", spec.samples, spec.channels);
     }
-    let audio_cvt = AudioCVT::new(
-        AudioFormat::U8,
-        2,
-        (GB_CLOCK_SPEED / AUDIO_FREQ_DIVIDER) as i32,
-        AudioFormat::U8,
-        2,
-        audio_device.spec().freq,
-    )?;
     audio_device.resume();
 
     let mut event_pump = sdl_context.event_pump()?;
@@ -95,6 +82,9 @@ fn main() -> Result<(), String> {
     'running: loop {
         let cycles = (time.elapsed().as_secs_f32() * GB_CLOCK_SPEED as f32) as u32;
         time = Instant::now();
+
+        // preventing cycles too large to crash blip_buf
+        let cycles = cycles.min(80000);
 
         // events
         {
@@ -139,14 +129,9 @@ fn main() -> Result<(), String> {
 
             // audio
             {
-                let buffer = gameboy.consume_audio_buffer();
-
-                let samples = std::mem::replace(buffer, Vec::new());
-                *buffer = audio_cvt.convert(samples);
-
-                audio_device.lock().samples.extend(buffer.iter());
-
-                buffer.clear();
+                gameboy.apu_output(|buf| {
+                    audio_device.queue(buf);
+                });
             }
 
             // graphics
@@ -163,21 +148,4 @@ fn main() -> Result<(), String> {
     }
 
     Ok(())
-}
-
-struct AudioOutput {
-    samples: VecDeque<u8>,
-}
-
-impl AudioCallback for AudioOutput {
-    type Channel = u8;
-
-    fn callback(&mut self, out: &mut [u8]) {
-        let len = out.len().min(self.samples.len());
-
-        out[..len].copy_from_slice(&self.samples.drain(..len).collect::<Vec<_>>());
-        out[len..]
-            .iter_mut()
-            .for_each(|x| *x = Self::Channel::SILENCE);
-    }
 }

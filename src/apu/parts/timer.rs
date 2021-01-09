@@ -1,5 +1,3 @@
-use crate::AUDIO_FREQ_DIVIDER;
-
 pub struct Timer {
     period: u32,
     counter: u32,
@@ -8,7 +6,7 @@ pub struct Timer {
 impl Timer {
     pub fn new(period: u32) -> Self {
         Timer {
-            period: period / AUDIO_FREQ_DIVIDER,
+            period: period,
             counter: 0,
         }
     }
@@ -24,7 +22,7 @@ impl Timer {
     }
 
     pub fn set_period(&mut self, period: u32) {
-        self.period = period / AUDIO_FREQ_DIVIDER;
+        self.period = period;
     }
 
     pub fn reset(&mut self) {

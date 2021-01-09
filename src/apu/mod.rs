@@ -4,6 +4,7 @@ mod parts;
 
 mod mixer;
 mod noise;
+mod resampler;
 mod square;
 mod wave;
 
@@ -13,9 +14,9 @@ pub use self::parts::*;
 pub use self::square::Square;
 pub use self::wave::Wave;
 
-pub struct Apu {
-    audio_buffer: Vec<u8>,
+use resampler::StereoBlipBuf;
 
+pub struct Apu {
     frameseq: FrameSequencer,
     square1: Square,
     square2: Square,
@@ -25,13 +26,13 @@ pub struct Apu {
 
     regs: [u8; 0x30],
     sound_enable: bool,
+
+    resampler: StereoBlipBuf,
 }
 
 impl Apu {
     pub fn new() -> Self {
         Apu {
-            audio_buffer: Vec::new(),
-
             frameseq: FrameSequencer::new(),
             square1: Square::new(),
             square2: Square::new(),
@@ -41,6 +42,12 @@ impl Apu {
 
             regs: [0u8; 0x30],
             sound_enable: false,
+
+            resampler: StereoBlipBuf::new(
+                crate::AUDIO_FREQUENCY / 30,
+                crate::GB_CLOCK_SPEED,
+                crate::AUDIO_FREQUENCY,
+            ),
         }
     }
 
@@ -162,13 +169,11 @@ impl Apu {
                     self.noise.next(),
                 ]);
 
-                self.audio_buffer.push(so1);
-                self.audio_buffer.push(so2);
+                self.resampler.push((so1 * 20, so2 * 20));
             }
         } else {
             for _ in 0..clocks {
-                self.audio_buffer.push(128);
-                self.audio_buffer.push(128);
+                self.resampler.push((0, 0));
             }
         }
     }
@@ -192,8 +197,8 @@ impl Apu {
         }
     }
 
-    pub fn consume_audio_buffer(&mut self) -> &mut Vec<u8> {
-        &mut self.audio_buffer
+    pub fn output(&mut self, cb: impl FnMut(&[i16])) {
+        self.resampler.output(cb);
     }
 }
 

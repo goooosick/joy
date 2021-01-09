@@ -18,7 +18,7 @@ impl Mixer {
         }
     }
 
-    pub fn mix(&self, chs: [u8; 4]) -> (u8, u8) {
+    pub fn mix(&self, chs: [u8; 4]) -> (u16, u16) {
         let mut so1 = 0;
         let mut so2 = 0;
 
@@ -27,9 +27,8 @@ impl Mixer {
             so2 += self.so2_masks[i] & chs[i];
         }
 
-        // (0..15) * 4 + 128 maps to (128..248)
-        so1 = ((so1 as u16 * self.so1_volume as u16) / 4) as u8 + 128;
-        so2 = ((so2 as u16 * self.so2_volume as u16) / 4) as u8 + 128;
+        let so1 = so1 as u16 * self.so1_volume as u16;
+        let so2 = so2 as u16 * self.so2_volume as u16;
 
         (so2, so1)
     }

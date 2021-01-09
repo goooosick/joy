@@ -35,8 +35,8 @@ impl Gameboy {
         self.bus.cart.save_game();
     }
 
-    pub fn consume_audio_buffer(&mut self) -> &mut Vec<u8> {
-        self.bus.apu.consume_audio_buffer()
+    pub fn apu_output(&mut self, cb: impl FnMut(&[i16])) {
+        self.bus.apu.output(cb);
     }
 
     pub fn get_frame_buffer(&self) -> &[u8] {

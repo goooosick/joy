@@ -1,4 +1,3 @@
-use crate::AUDIO_FREQ_DIVIDER;
 use crate::{Apu, Cartridge, Ppu};
 use crate::{InterruptHandler, Timer};
 use crate::{Joypad, JoypadState};
@@ -68,7 +67,7 @@ impl Bus {
 
         self.timer.update(4, &mut self.interrupt_handler);
         self.ppu.update(scaled_tcycles, &mut self.interrupt_handler);
-        self.apu.update(scaled_tcycles / AUDIO_FREQ_DIVIDER);
+        self.apu.update(scaled_tcycles);
 
         self.do_hdma();
 
