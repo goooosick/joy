@@ -19,6 +19,10 @@ struct Args {
     /// Window scaling.
     #[structopt(short = "s", long = "scale", default_value = "2")]
     scale: u32,
+
+    /// Frame sync.
+    #[structopt(long = "sync")]
+    sync: bool,
 }
 
 fn main() -> Result<(), String> {
@@ -83,9 +87,6 @@ fn main() -> Result<(), String> {
         let cycles = (time.elapsed().as_secs_f32() * GB_CLOCK_SPEED as f32) as u32;
         time = Instant::now();
 
-        // preventing cycles too large to crash blip_buf
-        let cycles = cycles.min(80000);
-
         // events
         {
             for event in event_pump.poll_iter() {
@@ -144,7 +145,9 @@ fn main() -> Result<(), String> {
             }
         }
 
-        std::thread::sleep(INTERVAL.checked_sub(time.elapsed()).unwrap_or_default());
+        if args.sync {
+            std::thread::sleep(INTERVAL.checked_sub(time.elapsed()).unwrap_or_default());
+        }
     }
 
     Ok(())

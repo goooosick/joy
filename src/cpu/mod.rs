@@ -85,7 +85,6 @@ impl Cpu {
 
                     io.step();
                     io.step();
-                    io.step();
 
                     self.push(io, self.reg.pc);
                     self.reg.pc = addr;
