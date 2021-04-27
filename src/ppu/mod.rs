@@ -1,11 +1,12 @@
 use crate::interrupt::{Interrupt, InterruptHandler};
 use crate::{GB_LCD_HEIGHT, GB_LCD_WIDTH};
 use bitflags::bitflags;
-use std::collections::VecDeque;
 
+use fetch::*;
 use palette::*;
 use vram::*;
 
+mod fetch;
 mod palette;
 mod vram;
 
@@ -19,26 +20,6 @@ pub enum LcdMode {
     VBlank = 1,
     OamSearch = 2,
     Transfer = 3,
-}
-
-enum FetchState {
-    ReadTile,
-    ReadData0,
-    ReadData1,
-    Push,
-}
-
-struct Fetcher {
-    ticks: usize,
-    state: FetchState,
-    tile_index: usize,
-    tile_attr: BgAttr,
-    fx: usize,
-    fy: usize,
-    scx: usize,
-    window_start: bool,
-    fb_offset: usize,
-    fifo: VecDeque<(BgAttr, TileValue)>,
 }
 
 pub struct Ppu {
@@ -63,12 +44,11 @@ pub struct Ppu {
     obj_palette: Palette,
     cgb: bool,
 
-    current_x: usize,
-    bg_above: [bool; GB_LCD_WIDTH],
-    bg_b00: [bool; GB_LCD_WIDTH],
-
     clocks: u32,
+    current_x: usize,
+
     fet: Fetcher,
+    oam_buffer: Vec<Sprite>,
 }
 
 impl Ppu {
@@ -95,204 +75,30 @@ impl Ppu {
             obj_palette: Palette::build(cgb),
             cgb,
 
-            current_x: 0,
-            bg_above: [false; GB_LCD_WIDTH],
-            bg_b00: [false; GB_LCD_WIDTH],
-
             clocks: 0,
-            fet: Fetcher {
-                ticks: 0,
-                state: FetchState::ReadTile,
-                tile_index: 0,
-                tile_attr: Default::default(),
-                fx: 0,
-                fy: 0,
-                scx: 0,
-                window_start: false,
-                fb_offset: 0,
-                fifo: Default::default(),
-            },
+            current_x: 0,
+
+            fet: Default::default(),
+            oam_buffer: Default::default(),
         }
     }
 
-    fn pixel_fetcher_reset(&mut self, window_start: bool) {
-        self.fet.ticks = 0;
-        self.fet.tile_index = 0;
-        self.fet.fx = 0;
-        self.fet.fy = 0;
-        self.fet.scx = 0;
-        self.fet.window_start = window_start;
-        self.fet.state = FetchState::ReadTile;
-        self.fet.fifo.clear();
+    fn oam_search(&mut self) {
+        // sprite size: 8 x 8 or 8 x 16
+        let sprite_size = 8 * (1 + self.lcdc.contains(LCDC::OBJECT_SIZE) as i16);
+        let ly = self.ly as i16;
 
-        if !window_start {
-            self.current_x = 0;
-            self.fet.scx = self.scx as usize & 0x07;
-            self.fet.fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
-        }
-    }
-
-    fn pixel_fetch(&mut self) {
-        self.fet.ticks += 1;
-        if self.fet.ticks == 2 {
-            self.fet.ticks = 0;
-
-            match self.fet.state {
-                FetchState::ReadTile => {
-                    let pattern_offset = (!self.lcdc.contains(LCDC::BG_TILE_TABLE)) as usize;
-
-                    let (index, map_base) = if self.fet.window_start {
-                        self.fet.fy = (self.ly - self.winy) as usize;
-
-                        (self.fet.fx, self.lcdc.contains(LCDC::WINDOW_MAP))
-                    } else {
-                        self.fet.fy = self.ly.wrapping_add(self.scy) as usize;
-
-                        (
-                            (self.scx as usize / 8 + self.fet.fx) & 0x1f,
-                            self.lcdc.contains(LCDC::BG_MAP),
-                        )
-                    };
-
-                    let map_index = (map_base as usize * 0x400) + (self.fet.fy / 8 * 32) + index;
-                    self.fet.tile_index = {
-                        let index = self.vram.tilemap(map_index);
-                        index + (pattern_offset * (index < 0x80) as usize) * 0x100
-                    };
-                    self.fet.tile_attr = *self.vram.attrmap(map_index);
-
-                    self.fet.state = FetchState::ReadData0;
-                }
-                FetchState::ReadData0 => {
-                    self.fet.state = FetchState::ReadData1;
-                }
-                FetchState::ReadData1 => {
-                    self.fet.state = FetchState::Push;
-                }
-                FetchState::Push => {
-                    let tile_y = (self.fet.fy & 0x07) ^ ((self.fet.tile_attr.flip_y as usize) * 7);
-                    let tile_line =
-                        if self.cgb || self.lcdc.contains(LCDC::BG_ON) || self.fet.window_start {
-                            self.vram
-                                .tile(self.fet.tile_attr.vram_bank, self.fet.tile_index)[tile_y]
-                        } else {
-                            // no background and window
-                            self.fet.tile_attr = Default::default();
-                            [TileValue::B00; 8]
-                        };
-
-                    if self.fet.tile_attr.flip_x {
-                        tile_line.iter().rev().for_each(|tile| {
-                            self.fet.fifo.push_back((self.fet.tile_attr, *tile));
-                        });
-                    } else {
-                        tile_line.iter().for_each(|tile| {
-                            self.fet.fifo.push_back((self.fet.tile_attr, *tile));
-                        });
-                    }
-
-                    self.fet.fx += 1;
-                    self.fet.state = FetchState::ReadTile;
-                }
-            }
-        }
-
-        if !self.fet.window_start {
-            if self.lcdc.contains(LCDC::WINDOW_ON) && self.ly >= self.winy {
-                if self.current_x >= self.winx.saturating_sub(7) as usize {
-                    self.pixel_fetcher_reset(true);
-                }
-            }
-        }
-
-        if self.fet.fifo.len() > 0 {
-            let (attr, tile) = self.fet.fifo.pop_front().unwrap();
-
-            if self.fet.scx > 0 {
-                self.fet.scx -= 1;
-            } else {
-                let color = *self.bg_palette.color(attr.bg_pal_index, tile);
-                self.frame_buffer[self.fet.fb_offset..][0..3].copy_from_slice(&color);
-
-                self.bg_above[self.current_x] = attr.above_all;
-                self.bg_b00[self.current_x] = tile == TileValue::B00;
-
-                self.current_x += 1;
-                self.fet.fb_offset += 3;
-            }
-        }
-
-        if self.current_x == GB_LCD_WIDTH {
-            let fb_offset = self.ly as usize * GB_LCD_WIDTH * 3;
-            let sprite_above = self.cgb && !self.lcdc.contains(LCDC::BG_ON);
-
-            if self.lcdc.contains(LCDC::OBJECT_ON) {
-                // sprite size: 8 x 8 or 8 x 16
-                let sprite_size = 8 * (1 + self.lcdc.contains(LCDC::OBJECT_SIZE) as i16);
-                let ly = self.ly as i16;
-
-                let mut sprites = self
-                    .vram
-                    .sprites()
-                    .iter()
-                    .filter(|sp| {
-                        sp.y <= ly
-                            && (sp.y + sprite_size) > ly
-                            && (sp.x + 8 >= 0)
-                            && sp.x < GB_LCD_WIDTH as i16
-                    })
-                    .take(MAX_SPRITE_PER_LINE)
-                    .collect::<Vec<_>>();
-                // why does this sort needed (to fix background-sprite interaction)?
-                if !self.cgb {
-                    sprites.sort_by(|sp0, sp1| sp0.x.cmp(&sp1.x));
-                }
-
-                // draw reverse, so samller x is on top
-                for sprite in sprites.iter().rev() {
-                    let sprite_y = (ly - sprite.y) as usize;
-                    // sprite size indepedent
-                    let tile_y = (sprite_y & 7) ^ (sprite.flip_y as usize * 7);
-
-                    // http://problemkaputt.de/pandocs.htm#vramspriteattributetableoam
-                    //              flip_y                   upper "NN AND FEh"
-                    //              0    1                   lower "NN OR 01h"
-                    //   y < 8  0   lo   hi
-                    //          1   hi   lo
-                    // ---------------------------------------------------------------
-                    let tile_index = if sprite_size == 16 {
-                        if sprite.flip_y ^ (sprite_y < 8) {
-                            sprite.tile_index & 0xfe
-                        } else {
-                            sprite.tile_index | 0x01
-                        }
-                    } else {
-                        sprite.tile_index
-                    };
-                    let tile = self.vram.tile(sprite.vram_bank, tile_index as usize);
-
-                    // only draw sprite pixels
-                    for x in 0..8 {
-                        let screen_x = sprite.x + x;
-
-                        let tile_x = x as usize ^ (sprite.flip_x as usize * 7);
-                        let color_index = tile[tile_y][tile_x];
-
-                        let on_screen = screen_x >= 0 && screen_x < GB_LCD_WIDTH as i16;
-                        if on_screen && color_index != TileValue::B00 {
-                            if sprite_above
-                                || (!self.bg_above[screen_x as usize] && sprite.above_bg)
-                                || self.bg_b00[screen_x as usize]
-                            {
-                                let color = self.obj_palette.color(sprite.palette, color_index);
-                                self.frame_buffer[(fb_offset + screen_x as usize * 3)..][0..3]
-                                    .copy_from_slice(color);
-                            }
-                        }
-                    }
-                }
-            }
-        }
+        let mut sprites = self
+            .vram
+            .sprites()
+            .iter()
+            .filter(|sp| sp.y <= (ly + 16) && (sp.y + sprite_size) > (ly + 16))
+            .take(MAX_SPRITE_PER_LINE)
+            .filter(|sp| sp.x > 0)
+            .cloned()
+            .collect::<Vec<_>>();
+        sprites.sort_by(|sp0, sp1| sp0.x.cmp(&sp1.x));
+        self.oam_buffer = sprites;
     }
 
     pub fn update(&mut self, clocks: u32, interrupts: &mut InterruptHandler) {
@@ -315,11 +121,8 @@ impl Ppu {
                     self.clocks -= 80;
                     self.mode = LcdMode::Transfer;
 
-                    // prepare drawing states
-                    self.bg_above.iter_mut().for_each(|x| *x = false);
-                    self.bg_b00.iter_mut().for_each(|x| *x = false);
-
-                    self.pixel_fetcher_reset(false);
+                    self.oam_search();
+                    self.pixel_fetch_reset(false);
                 }
             }
             LcdMode::Transfer => {

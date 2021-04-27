@@ -23,9 +23,16 @@ pub struct VideoRam {
 impl VideoRam {
     pub fn new(cgb: bool) -> Self {
         let empty_tile = [[TileValue::B00; 8]; 8];
+
+        let mut sprites = Box::new([Sprite::default(); SPRITE_COUNT]);
+        sprites
+            .iter_mut()
+            .enumerate()
+            .for_each(|(i, sp)| sp.index = i);
+
         VideoRam {
             sprite_table: Box::new([0u8; OAM_SIZE]),
-            sprites: Box::new([Sprite::default(); SPRITE_COUNT]),
+            sprites,
 
             tile_sets: [Box::new([0u8; TILESET_SIZE]), Box::new([0u8; TILESET_SIZE])],
             tiles: [
@@ -67,8 +74,8 @@ impl VideoRam {
 
             let sprite = &mut self.sprites[addr >> 2];
             match addr & 0x03 {
-                0x00 => sprite.y = data as i16 - 16,
-                0x01 => sprite.x = data as i16 - 8,
+                0x00 => sprite.y = data as i16,
+                0x01 => sprite.x = data as i16,
                 0x02 => sprite.tile_index = data,
                 0x03 => {
                     sprite.above_bg = (data & 0b1000_0000) == 0;
@@ -161,6 +168,7 @@ impl VideoRam {
 
 #[derive(Default, Copy, Clone)]
 pub struct Sprite {
+    pub index: usize,
     pub x: i16,
     pub y: i16,
     pub tile_index: u8,

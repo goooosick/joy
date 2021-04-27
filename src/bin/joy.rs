@@ -17,12 +17,8 @@ struct Args {
     file: String,
 
     /// Window scaling.
-    #[structopt(short = "s", long = "scale", default_value = "2")]
+    #[structopt(short = "s", long = "scale", default_value = "3")]
     scale: u32,
-
-    /// Frame sync.
-    #[structopt(long = "sync")]
-    sync: bool,
 }
 
 fn main() -> Result<(), String> {
@@ -84,7 +80,7 @@ fn main() -> Result<(), String> {
 
     // main loop
     'running: loop {
-        let cycles = (time.elapsed().as_secs_f32() * GB_CLOCK_SPEED as f32) as u32;
+        let mut cycles = (time.elapsed().as_secs_f32() * GB_CLOCK_SPEED as f32) as u32;
         time = Instant::now();
 
         // events
@@ -104,6 +100,12 @@ fn main() -> Result<(), String> {
                         keycode: Some(Keycode::S),
                         ..
                     } => gameboy.save_game(),
+                    Event::KeyDown {
+                        keycode: Some(Keycode::Tab),
+                        ..
+                    } => {
+                        cycles *= 2;
+                    }
                     _ => {}
                 }
             }
@@ -145,9 +147,7 @@ fn main() -> Result<(), String> {
             }
         }
 
-        if args.sync {
-            std::thread::sleep(INTERVAL.checked_sub(time.elapsed()).unwrap_or_default());
-        }
+        std::thread::sleep(INTERVAL.checked_sub(time.elapsed()).unwrap_or_default());
     }
 
     Ok(())
