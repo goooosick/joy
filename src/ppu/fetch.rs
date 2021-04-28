@@ -54,8 +54,9 @@ impl Ppu {
             self.fet.scx = self.scx as usize & 0x07;
         } else {
             self.fet.map_start = self.lcdc.contains(LCDC::WINDOW_MAP) as usize;
-            self.fet.fy = (self.ly - self.winy) as usize;
+            self.fet.fy = self.win_ly as usize;
             self.fet.scx = 0;
+            self.win_ly += 1;
         }
 
         self.fet.map_start = (self.fet.map_start * 0x400) + (self.fet.fy / 8 * 32);

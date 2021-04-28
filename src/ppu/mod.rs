@@ -38,6 +38,7 @@ pub struct Ppu {
     lyc: u8,
     winy: u8,
     winx: u8,
+    win_ly: u8,
 
     hdma_avaliable: bool,
     bg_palette: Palette,
@@ -69,6 +70,7 @@ impl Ppu {
             lyc: 0,
             winy: 0,
             winx: 0,
+            win_ly: 0,
 
             hdma_avaliable: false,
             bg_palette: Palette::build(cgb),
@@ -169,6 +171,7 @@ impl Ppu {
 
                     if self.ly == 154 {
                         self.ly = 0;
+                        self.win_ly = 0;
 
                         self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
@@ -237,6 +240,7 @@ impl Ppu {
                 let new = LCDC::from_bits_truncate(b);
                 if !new.contains(LCDC::LCD_ON) && self.lcdc.contains(LCDC::LCD_ON) {
                     self.ly = 0;
+                    self.win_ly = 0;
                     self.clocks = 0;
                     self.mode = LcdMode::HBlank;
                 }
