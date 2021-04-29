@@ -20,6 +20,7 @@ pub struct Fetcher {
     fb_offset: usize,
     state: FetchState,
 
+    bg_restart: bool,
     window_start: bool,
     map_start: usize,
     tile_index: usize,
@@ -30,7 +31,6 @@ pub struct Fetcher {
     bg_fifo: VecDeque<(BgAttr, TileValue)>,
 
     sprite_fetching: bool,
-    sprite_index: usize,
     sprite_fifo: VecDeque<(Sprite, TileValue)>,
 }
 
@@ -49,6 +49,7 @@ impl Ppu {
             self.fet.sprite_fetching = false;
             self.fet.sprite_fifo.clear();
 
+            self.fet.bg_restart = true;
             self.fet.map_start = self.lcdc.contains(LCDC::BG_MAP) as usize;
             self.fet.fy = self.ly.wrapping_add(self.scy) as usize;
             self.fet.scx = self.scx as usize & 0x07;
@@ -62,7 +63,7 @@ impl Ppu {
         self.fet.map_start = (self.fet.map_start * 0x400) + (self.fet.fy / 8 * 32);
     }
 
-    pub fn pixel_fetch(&mut self) {
+    pub fn pixel_fetch(&mut self) -> bool {
         if !self.fet.sprite_fetching && self.lcdc.contains(LCDC::OBJECT_ON) {
             if let Some(sp) = self.oam_buffer.first() {
                 if sp.x <= self.current_x as i16 + 8 {
@@ -88,26 +89,33 @@ impl Ppu {
         }
 
         if !self.fet.sprite_fetching {
+            if !self.fet.window_start {
+                if self.ly >= self.winy
+                    && self.lcdc.contains(LCDC::WINDOW_ON)
+                    && (self.cgb || self.lcdc.contains(LCDC::BG_ON))
+                {
+                    if self.current_x >= self.winx.saturating_sub(7) as usize {
+                        self.pixel_fetch_reset(true);
+                    }
+                }
+            }
+
             if let Some((bg_attr, bg_tile)) = self.fet.bg_fifo.pop_front() {
                 if self.fet.scx > 0 {
                     self.fet.scx -= 1;
                 } else {
                     let bg_color = *self.bg_palette.color(bg_attr.bg_pal_index, bg_tile);
-                    let color = if let Some((sp, sp_tile)) = self.fet.sprite_fifo.pop_front() {
-                        let sp_color = *self.obj_palette.color(sp.palette, sp_tile);
 
-                        let sp_priority = self.cgb && !self.lcdc.contains(LCDC::BG_ON);
-                        if sp_priority
-                            || (sp_tile != TileValue::B00
-                                && (bg_tile == TileValue::B00
-                                    || (!bg_attr.above_all && sp.above_bg)))
+                    let sp_priority =
+                        (self.cgb && !self.lcdc.contains(LCDC::BG_ON)) || bg_tile == TileValue::B00;
+                    let color = match self.fet.sprite_fifo.pop_front() {
+                        None | Some((_, TileValue::B00)) => bg_color,
+                        Some((sp, sp_tile))
+                            if sp_priority || (!bg_attr.above_all && sp.above_bg) =>
                         {
-                            sp_color
-                        } else {
-                            bg_color
+                            *self.obj_palette.color(sp.palette, sp_tile)
                         }
-                    } else {
-                        bg_color
+                        _ => bg_color,
                     };
 
                     self.frame_buffer[self.fet.fb_offset..][0..3].copy_from_slice(&color);
@@ -117,13 +125,15 @@ impl Ppu {
                 }
             }
         }
+
+        self.current_x < crate::GB_LCD_WIDTH
     }
 
     pub fn sprite_fetching(&mut self) {
         match self.fet.state {
             FetchState::ReadTile => {
                 let sp = &self.oam_buffer[0];
-                self.fet.sprite_index = if self.lcdc.contains(LCDC::OBJECT_SIZE) {
+                self.fet.tile_index = if self.lcdc.contains(LCDC::OBJECT_SIZE) {
                     if sp.flip_y ^ ((self.ly as i16 - sp.y) < 8) {
                         sp.tile_index & 0xfe
                     } else {
@@ -146,7 +156,7 @@ impl Ppu {
 
                 let sprite_y = (self.ly as i16 - sp.y) as usize;
                 let tile_y = (sprite_y & 7) ^ (sp.flip_y as usize * 7);
-                let mut tile_line = self.vram.tile(sp.vram_bank, self.fet.sprite_index)[tile_y];
+                let mut tile_line = self.vram.tile(sp.vram_bank, self.fet.tile_index)[tile_y];
 
                 if sp.flip_x {
                     tile_line.reverse();
@@ -178,14 +188,6 @@ impl Ppu {
     }
 
     pub fn bg_fetching(&mut self) {
-        if !self.fet.window_start {
-            if self.lcdc.contains(LCDC::WINDOW_ON) && self.ly >= self.winy {
-                if self.current_x >= self.winx.saturating_sub(7) as usize {
-                    self.pixel_fetch_reset(true);
-                }
-            }
-        }
-
         match self.fet.state {
             FetchState::ReadTile => {
                 let index = if self.fet.window_start {
@@ -209,19 +211,23 @@ impl Ppu {
             }
             FetchState::ReadData1 => {
                 self.fet.state = FetchState::Push;
+
+                if self.fet.bg_restart {
+                    self.fet.state = FetchState::ReadTile;
+                    self.fet.bg_restart = false;
+                }
             }
             FetchState::Push => {
                 if self.fet.bg_fifo.len() == 0 {
                     let tile_y = (self.fet.fy & 0x07) ^ ((self.fet.tile_attr.flip_y as usize) * 7);
-                    let mut tile_line =
-                        if self.cgb || self.lcdc.contains(LCDC::BG_ON) || self.fet.window_start {
-                            self.vram
-                                .tile(self.fet.tile_attr.vram_bank, self.fet.tile_index)[tile_y]
-                        } else {
-                            // no background and window
-                            self.fet.tile_attr = Default::default();
-                            [TileValue::B00; 8]
-                        };
+                    let mut tile_line = if self.cgb || self.lcdc.contains(LCDC::BG_ON) {
+                        self.vram
+                            .tile(self.fet.tile_attr.vram_bank, self.fet.tile_index)[tile_y]
+                    } else {
+                        // no background and window
+                        self.fet.tile_attr = Default::default();
+                        [TileValue::B00; 8]
+                    };
 
                     if self.fet.tile_attr.flip_x {
                         tile_line.reverse();

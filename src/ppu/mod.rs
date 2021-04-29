@@ -129,9 +129,7 @@ impl Ppu {
             }
             LcdMode::Transfer => {
                 for _ in 0..clocks {
-                    if self.current_x < GB_LCD_WIDTH {
-                        self.pixel_fetch();
-                    } else {
+                    if !self.pixel_fetch() {
                         self.mode = LcdMode::HBlank;
 
                         self.hdma_avaliable = true;

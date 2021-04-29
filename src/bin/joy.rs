@@ -17,7 +17,7 @@ struct Args {
     file: String,
 
     /// Window scaling.
-    #[structopt(short = "s", long = "scale", default_value = "3")]
+    #[structopt(short = "s", long = "scale", default_value = "2")]
     scale: u32,
 }
 
@@ -93,19 +93,13 @@ fn main() -> Result<(), String> {
                         ..
                     } => break 'running,
                     Event::KeyDown {
-                        keycode: Some(Keycode::LShift),
-                        ..
-                    } => paused = !paused,
-                    Event::KeyDown {
-                        keycode: Some(Keycode::S),
-                        ..
-                    } => gameboy.save_game(),
-                    Event::KeyDown {
-                        keycode: Some(Keycode::Tab),
-                        ..
-                    } => {
-                        cycles *= 2;
-                    }
+                        keycode: Some(key), ..
+                    } => match key {
+                        Keycode::LShift => paused = !paused,
+                        Keycode::S => gameboy.save_game(),
+                        Keycode::Tab => cycles *= 2,
+                        _ => {}
+                    },
                     _ => {}
                 }
             }
