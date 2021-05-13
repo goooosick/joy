@@ -1,8 +1,10 @@
 use crate::{Apu, Cartridge, Ppu};
 use crate::{InterruptHandler, Timer};
 use crate::{Joypad, JoypadState};
+use dma::Dma;
 use hdma::Hdma;
 
+mod dma;
 mod hdma;
 
 #[derive(Copy, Clone, Eq, PartialEq)]
@@ -22,6 +24,7 @@ pub struct Bus {
     high_ram: [u8; 0x80],
 
     // devices
+    dma: Dma,
     hdma: Hdma,
     timer: Timer,
     joypad: Joypad,
@@ -47,6 +50,7 @@ impl Bus {
             io_ports: [0u8; 0x80],
             high_ram: [0u8; 0x80],
 
+            dma: Dma::new(),
             hdma: Hdma::new(),
             timer: Timer::new(),
             joypad: Joypad::new(),
@@ -69,6 +73,7 @@ impl Bus {
         self.ppu.update(scaled_tcycles, &mut self.interrupt_handler);
         self.apu.update(scaled_tcycles);
 
+        self.do_dma();
         self.do_hdma();
 
         self.cycles += scaled_tcycles;
@@ -158,7 +163,7 @@ impl Bus {
             0xff04..=0xff07 => self.timer.read(addr),
             0xff0f => self.interrupt_handler.read(addr),
             0xff10..=0xff3f => self.apu.read(addr),
-            0xff46 => 0,
+            0xff46 => self.dma.read(addr),
             0xff40..=0xff4b => self.ppu.read(addr),
 
             0xff4d if cgb => ((self.speed_mode as u8) << 7) | (self.prepare_speed_switch as u8),
@@ -178,7 +183,7 @@ impl Bus {
             0xff04..=0xff07 => self.timer.write(addr, data),
             0xff0f => self.interrupt_handler.write(addr, data),
             0xff10..=0xff3f => self.apu.write(addr, data),
-            0xff46 => self.do_dma(data),
+            0xff46 => self.dma.write(addr, data),
             0xff40..=0xff4b => self.ppu.write(addr, data),
 
             0xff4d if cgb => self.prepare_speed_switch = (data & 0b01) != 0,
@@ -195,11 +200,10 @@ impl Bus {
         self.joypad.update(&mut self.interrupt_handler);
     }
 
-    fn do_dma(&mut self, addr: u8) {
-        let src = (addr as u16) << 8;
-        for offset in 0x00..0xa0 {
-            let data = self.read_direct(src + offset);
-            self.ppu.dma_write(offset, data);
+    fn do_dma(&mut self) {
+        if let Some((src, dst)) = self.dma.update() {
+            let data = self.read_direct(src);
+            self.ppu.dma_write(dst, data);
         }
     }
 

@@ -47,6 +47,7 @@ pub struct Ppu {
 
     clocks: u32,
     current_x: usize,
+    ly_154: bool,
 
     fet: Fetcher,
     oam_buffer: Vec<Sprite>,
@@ -79,6 +80,7 @@ impl Ppu {
 
             clocks: 0,
             current_x: 0,
+            ly_154: false,
 
             fet: Default::default(),
             oam_buffer: Default::default(),
@@ -148,6 +150,7 @@ impl Ppu {
 
                     if self.ly == 144 {
                         self.mode = LcdMode::VBlank;
+                        self.ly_154 = false;
 
                         interrupts.request_interrupt(Interrupt::VBlank);
                         stat_interrupt = self.stat.contains(STAT::VBLANK_INTERRUPT);
@@ -162,20 +165,26 @@ impl Ppu {
                 }
             }
             LcdMode::VBlank => {
+                // LY 153 lasts 4 cycles, but it's still in VBLANK.
+                if self.ly == 153 && self.clocks == 4 {
+                    self.ly = 0;
+                    self.ly_154 = true;
+                    self.check_lyc(interrupts);
+                }
+
                 if self.clocks >= 456 {
                     self.clocks -= 456;
 
-                    self.ly += 1;
-
-                    if self.ly == 154 {
+                    if self.ly_154 {
                         self.ly = 0;
                         self.win_ly = 0;
 
                         self.mode = LcdMode::OamSearch;
                         stat_interrupt = self.stat.contains(STAT::OAM_INTERRUPT);
+                    } else {
+                        self.ly += 1;
+                        self.check_lyc(interrupts);
                     }
-
-                    self.check_lyc(interrupts);
                 }
             }
         };
@@ -205,10 +214,7 @@ impl Ppu {
             0xff41 => self.stat.bits() | (self.mode as u8),
             0xff42 => self.scy,
             0xff43 => self.scx,
-            // NOTE: early reporting line 0 when in line 153 (maybe not the whole line, but this works)
-            // Some games will start working when ly hits 0, if ly-0 delays scene will corrupt,
-            // e.g. Aladdin and TombRadier (gbc)
-            0xff44 => self.ly % 153,
+            0xff44 => self.ly,
             0xff45 => self.lyc,
             0xff47 => self.bg_palette.read_dmg(0),
             0xff48 => self.obj_palette.read_dmg(0),
