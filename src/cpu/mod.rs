@@ -55,6 +55,8 @@ impl Cpu {
         let cycles = io.cycles();
 
         if !self.halt {
+            self.handle_interrupts(io);
+
             let op = self.fetch_byte(io);
 
             if op != 0xcb {
@@ -64,31 +66,25 @@ impl Cpu {
                 self.dispatch_op_cb(op, io);
             };
         } else {
+            if io.interrupt_handler.has_interrupts() {
+                self.halt = false;
+            }
             io.step();
         };
-
-        self.handle_interrupts(io);
 
         io.cycles() - cycles
     }
 
     fn handle_interrupts(&mut self, io: &mut Bus) {
-        if io.interrupt_handler.has_interrupts() {
-            if self.halt {
-                self.halt = false;
+        if self.interrupt_master_enable && io.interrupt_handler.has_interrupts() {
+            if let Some(addr) = io.interrupt_handler.service_interrupt() {
+                self.interrupt_master_enable = false;
+
                 io.step();
-            }
+                io.step();
 
-            if self.interrupt_master_enable {
-                if let Some(addr) = io.interrupt_handler.service_interrupt() {
-                    self.interrupt_master_enable = false;
-
-                    io.step();
-                    io.step();
-
-                    self.push(io, self.reg.pc);
-                    self.reg.pc = addr;
-                };
+                self.push(io, self.reg.pc);
+                self.reg.pc = addr;
             }
         }
     }

@@ -20,7 +20,6 @@ pub struct JoypadState {
 pub struct Joypad {
     select: SelectFlag,
 
-    input_bits: u8,
     button_bits: u8,
     direction_bits: u8,
 }
@@ -30,25 +29,24 @@ impl Joypad {
         Joypad {
             select: SelectFlag::all(),
 
-            input_bits: 0xff,
             button_bits: 0xff,
             direction_bits: 0xff,
         }
     }
 
     pub fn read(&self, _addr: u16) -> u8 {
-        self.select.bits() | self.input_bits | 0b1100_0000
-    }
-
-    pub fn write(&mut self, _addr: u16, data: u8) {
-        self.select = SelectFlag::from_bits_truncate(data);
-        self.input_bits = if !self.select.contains(SelectFlag::BUTTON) {
+        let bits = if !self.select.contains(SelectFlag::BUTTON) {
             self.button_bits
         } else if !self.select.contains(SelectFlag::DIRECTION) {
             self.direction_bits
         } else {
             EMPTY_INPUT
         };
+        self.select.bits() | bits | 0b1100_0000
+    }
+
+    pub fn write(&mut self, _addr: u16, data: u8) {
+        self.select = SelectFlag::from_bits_truncate(data);
     }
 
     pub fn set_input(&mut self, states: JoypadState) {
@@ -63,8 +61,13 @@ impl Joypad {
     }
 
     pub fn update(&mut self, interrupts: &mut InterruptHandler) {
-        if interrupts.interrupt_enabled(Interrupt::Joypad) && self.input_bits != EMPTY_INPUT {
-            interrupts.request_interrupt(Interrupt::Joypad);
+        if interrupts.interrupt_enabled(Interrupt::Joypad) {
+            if (!self.select.contains(SelectFlag::BUTTON) && self.button_bits != EMPTY_INPUT)
+                || (!self.select.contains(SelectFlag::DIRECTION)
+                    && self.direction_bits != EMPTY_INPUT)
+            {
+                interrupts.request_interrupt(Interrupt::Joypad);
+            }
         }
     }
 }
