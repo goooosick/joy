@@ -27,8 +27,10 @@ impl Mixer {
             so2 += self.so2_masks[i] & chs[i];
         }
 
-        let so1 = so1 as u16 * self.so1_volume as u16;
-        let so2 = so2 as u16 * self.so2_volume as u16;
+        // (((0..15) * 4) * (1..8)) * 120
+        // maps to (0..57600)
+        let so1 = (so1 as u16 * self.so1_volume as u16) * 120;
+        let so2 = (so2 as u16 * self.so2_volume as u16) * 120;
 
         (so2, so1)
     }

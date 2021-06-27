@@ -169,7 +169,7 @@ impl Apu {
                     self.noise.next(),
                 ]);
 
-                self.resampler.push((so1 * 20, so2 * 20));
+                self.resampler.push((so1, so2));
             }
         } else {
             for _ in 0..clocks {
